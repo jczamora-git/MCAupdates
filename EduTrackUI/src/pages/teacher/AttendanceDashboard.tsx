@@ -13,7 +13,7 @@ import { ChevronLeft, ChevronRight, Check, X, History, Calendar, Clock } from 'l
 const AttendanceDashboard: React.FC = () => {
   const [courses, setCourses] = useState<any[]>([]);
   const [selectedCourseId, setSelectedCourseId] = useState<string>('');
-  const [courseLevel, setCourseLevel] = useState<number | string | null>(null);
+  const [courseSectionId, setCourseSectionId] = useState<number | string | null>(null);
   const [showSessionOptions, setShowSessionOptions] = useState(false);
   
   // Session states
@@ -51,11 +51,10 @@ const AttendanceDashboard: React.FC = () => {
 
   // Fetch courses on mount
   useEffect(() => {
-    if (user) {
+    if (user?.id) {
       fetchTeacherCourses().catch(() => {});
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [user?.id]);
 
   // Real-time clock update
   useEffect(() => {
@@ -94,40 +93,54 @@ const AttendanceDashboard: React.FC = () => {
   const fetchTeacherCourses = async () => {
     if (!user) return;
     try {
-      let teacherId: string | null = null;
-      try {
-        const teacherRes = await apiGet(`/api/teachers/by-user/${user.id}`);
-        if (teacherRes && teacherRes.teacher && teacherRes.teacher.id) {
-          teacherId = teacherRes.teacher.id;
-        }
-      } catch (err) {
-        console.error('Failed to get teacher by user_id:', err);
-      }
+      const subjectsRes = await apiGet(API_ENDPOINTS.TEACHER_MY_SUBJECTS);
+      const subjects = Array.isArray(subjectsRes?.subjects) ? subjectsRes.subjects : [];
 
-      if (!teacherId) {
-        console.error('Could not find teacher record for user:', user.id);
+      if (subjects.length === 0) {
+        setCourses([]);
         return;
       }
 
-      const assignmentRes = await apiGet(`/api/teachers/${teacherId}/assignment`);
-      if (!assignmentRes || !assignmentRes.success) {
-        console.error('Failed to fetch teacher assignment');
-        return;
-      }
+      const sectionIds = Array.from(new Set(
+        subjects
+          .map((s: any) => s.section_id)
+          .filter((id: any) => id && !String(id).startsWith('default-'))
+      )) as Array<string | number>;
 
-      const teacherLevel = assignmentRes.assignment?.level;
-      if (assignmentRes.assignment && assignmentRes.subjects && Array.isArray(assignmentRes.subjects)) {
-        const mapped = assignmentRes.subjects.map((s: any, idx: number) => ({
-          id: s.id ?? idx,
-          title: s.name || '',
-          code: s.code || '',
-          level: teacherLevel
-        }));
-        setCourses(mapped);
-        return;
-      }
+      const studentCountBySection = new Map<string, number>();
+      await Promise.all(sectionIds.map(async (sectionId) => {
+        try {
+          const res = await apiGet(`${API_ENDPOINTS.STUDENTS}?section_id=${encodeURIComponent(String(sectionId))}`);
+          const list = Array.isArray(res?.data) ? res.data : (Array.isArray(res) ? res : []);
+          studentCountBySection.set(String(sectionId), list.length);
+        } catch (_) {}
+      }));
+
+      const mapped = subjects.map((subject: any, idx: number) => {
+        const level = subject.level || subject.subject_level || '';
+        const sectionId = subject.section_id ?? null;
+        const sectionName = subject.section_name ?? level;
+        const sections = sectionId
+          ? [{ id: sectionId, name: sectionName, students: studentCountBySection.get(String(sectionId)) }]
+          : [];
+
+        return {
+          id: subject.subject_id ?? subject.id ?? idx,
+          subject_id: subject.subject_id ?? subject.id ?? idx,
+          title: subject.name || subject.subject_name || '',
+          code: subject.course_code || subject.code || '',
+          level,
+          section_id: sectionId,
+          section_name: sectionName,
+          sections,
+          status: subject.status ?? 'active'
+        };
+      });
+
+      setCourses(mapped);
     } catch (e) {
       console.error('fetchTeacherCourses error:', e);
+      setCourses([]);
     }
   };
 
@@ -185,12 +198,12 @@ const AttendanceDashboard: React.FC = () => {
     setAllSubjectsAttendance(attendanceMap);
   };
 
-  const fetchStudentsByLevel = async () => {
-    if (!courseLevel) return;
+  const fetchStudentsBySection = async () => {
+    if (!courseSectionId) return;
     try {
       setLoadingStudents(true);
       const params = new URLSearchParams();
-      params.set('year_level', String(courseLevel));
+      params.set('section_id', String(courseSectionId));
       
       const stuRes = await apiGet(`${API_ENDPOINTS.STUDENTS}?${params.toString()}`);
       const list = stuRes.data ?? stuRes.students ?? stuRes ?? [];
@@ -222,18 +235,18 @@ const AttendanceDashboard: React.FC = () => {
   };
 
   const startSession = async () => {
-    if (!selectedCourseId || courseLevel === null) {
+    if (!selectedCourseId || courseSectionId === null) {
       notify.error('Please select a subject first');
       return;
     }
-    setCourseLevel(courseLevel);
+    setCourseSectionId(courseSectionId);
     // Generate session ID with format: MCA-YYYYMMDD-randomstring
     const now = new Date();
     const dateStr = now.toISOString().split('T')[0].replace(/-/g, '');
     const randomStr = Math.random().toString(36).substr(2, 8).toUpperCase();
     const newSessionId = `MCA-${dateStr}-${randomStr}`;
     setSessionId(newSessionId);
-    await fetchStudentsByLevel();
+    await fetchStudentsBySection();
     setSessionStarted(true);
   };
 
@@ -781,9 +794,12 @@ const AttendanceDashboard: React.FC = () => {
                     navigate('/teacher/attendance-session', {
                       state: {
                         courseId: String(course.id),
+                        subjectId: String(course.subject_id ?? course.id),
+                        sectionId: String(course.section_id ?? ''),
                         courseCode: course.code,
                         courseTitle: course.title,
-                        courseLevel: course.level
+                        courseLevel: course.level,
+                        sectionName: course.section_name
                       }
                     });
                   }}
@@ -948,7 +964,7 @@ const AttendanceDashboard: React.FC = () => {
                           key={course.id}
                           onClick={() => {
                             setSelectedCourseId(String(course.id));
-                            setCourseLevel(course.level);
+                            setCourseSectionId(course.section_id ?? null);
                             setShowSessionOptions(true);
                             // Fetch today's attendance for this course
                             setTimeout(() => {

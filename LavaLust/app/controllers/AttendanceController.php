@@ -128,8 +128,8 @@ class AttendanceController extends Controller
             // Join with students and users to return readable student info
             $records = $this->db->table('attendance')
                 ->select('attendance.*, students.student_id as student_code, users.first_name, users.last_name')
-                ->join('students', 'students.user_id = attendance.student_id')
-                ->join('users', 'users.id = attendance.student_id')
+                ->join('students', 'students.student_id = attendance.student_id')
+                ->join('users', 'users.id = students.user_id')
                 ->where('attendance.student_id', $student_id)
                 ->order_by('attendance.created_at', 'DESC')
                 ->get_all();
@@ -222,7 +222,7 @@ class AttendanceController extends Controller
      * - section_id (optional): section id to filter by section
      * - date (optional): date in YYYY-MM-DD format, defaults to today
      * 
-     * Returns: { success, data: [ { id, student_id, teacher_id, course_id, section_id, status, created_at }, ... ] }
+     * Returns: { success, data: [ { id, student_id, teacher_id, course_id, status, created_at }, ... ] }
      */
     public function api_get_today_attendance()
     {
@@ -255,15 +255,15 @@ class AttendanceController extends Controller
 
             // Build the query
             $query = $this->db->table('attendance')
-                ->select('attendance.id, attendance.student_id, attendance.teacher_id, attendance.course_id, attendance.section_id, attendance.status, attendance.created_at, students.student_id as student_code, users.first_name, users.last_name')
-                ->join('students', 'students.user_id = attendance.student_id')
-                ->join('users', 'users.id = attendance.student_id')
+                ->select('attendance.id, attendance.student_id, attendance.teacher_id, attendance.course_id, attendance.status, attendance.created_at, students.student_id as student_code, students.section_id, users.first_name, users.last_name')
+                ->join('students', 'students.student_id = attendance.student_id')
+                ->join('users', 'users.id = students.user_id')
                 ->where('attendance.teacher_id', $teacher_id)
                 ->where('attendance.course_id', $course_id);
 
             // Filter by section if provided
             if ($section_id) {
-                $query->where('attendance.section_id', $section_id);
+                $query->where('students.section_id', $section_id);
             }
 
             // Filter by date (today by default)

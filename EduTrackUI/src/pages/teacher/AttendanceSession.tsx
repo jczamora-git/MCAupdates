@@ -10,9 +10,12 @@ import { ChevronLeft, ChevronRight, Check, X } from 'lucide-react';
 
 interface LocationState {
   courseId: string;
+  subjectId?: string;
+  sectionId?: string;
   courseCode: string;
   courseTitle: string;
   courseLevel: string | number;
+  sectionName?: string;
 }
 
 const AttendanceSession: React.FC = () => {
@@ -106,11 +109,15 @@ const AttendanceSession: React.FC = () => {
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, [sessionStarted, currentStudentIndex, students]);
 
-  const fetchStudentsByLevel = async (level: string | number) => {
+  const fetchStudentsBySection = async (sectionId?: string) => {
     setLoadingStudents(true);
     try {
+      if (!sectionId) {
+        notify.error('Section not provided for this subject');
+        return false;
+      }
       const params = new URLSearchParams();
-      params.set('year_level', String(level));
+      params.set('section_id', String(sectionId));
       
       const res = await apiGet(`${API_ENDPOINTS.STUDENTS}?${params.toString()}`);
       const list = res.data ?? res.students ?? res ?? [];
@@ -145,7 +152,7 @@ const AttendanceSession: React.FC = () => {
   const startSession = async () => {
     if (!state) return;
 
-    const success = await fetchStudentsByLevel(state.courseLevel);
+    const success = await fetchStudentsBySection(state.sectionId);
     if (!success) {
       navigate('/teacher/attendance');
       return;

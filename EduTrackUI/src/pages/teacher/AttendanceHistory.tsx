@@ -56,38 +56,28 @@ const AttendanceHistory: React.FC = () => {
   const fetchTeacherCourses = async () => {
     if (!user) return;
     try {
-      let teacherId: string | null = null;
-      try {
-        const teacherRes = await apiGet(`/api/teachers/by-user/${user.id}`);
-        if (teacherRes && teacherRes.teacher && teacherRes.teacher.id) {
-          teacherId = teacherRes.teacher.id;
-        }
-      } catch (err) {
-        console.error('Failed to get teacher by user_id:', err);
-      }
+      const subjectsRes = await apiGet(API_ENDPOINTS.TEACHER_MY_SUBJECTS);
+      const subjects = Array.isArray(subjectsRes?.subjects) ? subjectsRes.subjects : [];
 
-      if (!teacherId) {
-        notify.error('Could not find teacher record');
-        return;
-      }
+      const mapped = subjects.map((subject: any, idx: number) => {
+        const level = subject.level || subject.subject_level || '';
+        const sectionId = subject.section_id ?? null;
+        const sectionName = subject.section_name ?? level;
 
-      const assignmentRes = await apiGet(`/api/teachers/${teacherId}/assignment`);
-      if (!assignmentRes || !assignmentRes.success) {
-        notify.error('Failed to fetch teacher assignment');
-        return;
-      }
+        return {
+          id: subject.subject_id ?? subject.id ?? idx,
+          subject_id: subject.subject_id ?? subject.id ?? idx,
+          code: subject.course_code || subject.code || '',
+          title: subject.name || subject.subject_name || '',
+          level,
+          section_id: sectionId,
+          section_name: sectionName
+        };
+      });
 
-      if (assignmentRes.assignment && assignmentRes.subjects && Array.isArray(assignmentRes.subjects)) {
-        const mapped = assignmentRes.subjects.map((s: any) => ({
-          id: s.id,
-          code: s.code || '',
-          title: s.name || '',
-          level: s.level || s.year_level || null
-        }));
-        setCourses(mapped);
-        if (mapped.length > 0) {
-          setSelectedCourseId(String(mapped[0].id));
-        }
+      setCourses(mapped);
+      if (mapped.length > 0) {
+        setSelectedCourseId(String(mapped[0].id));
       }
     } catch (e) {
       console.error('fetchTeacherCourses error:', e);
@@ -104,31 +94,16 @@ const AttendanceHistory: React.FC = () => {
       const res = await apiGet(`${API_ENDPOINTS.ATTENDANCE_COURSE(parseInt(selectedCourseId))}`);
       const records = Array.isArray(res.data) ? res.data : Array.isArray(res) ? res : [];
 
-      // Fetch all students for this course level using year_level (same as AttendanceQR)
+      // Fetch all students for this course section
       let studentsList: Student[] = [];
       
-      // Try multiple ways to get the year_level/level
-      let yearLevel = course?.level || course?.year_level;
-      console.log('Course from array:', course, 'Year Level:', yearLevel);
-      
-      // If not found in courses array, fetch subject directly
-      if (!yearLevel && selectedCourseId) {
-        try {
-          console.log('Fetching subject info for course_id:', selectedCourseId);
-          const subjectRes = await apiGet(`/api/subjects/${selectedCourseId}`);
-          const subject = subjectRes?.subject || subjectRes?.data;
-          console.log('Subject data:', subject);
-          yearLevel = subject?.year_level || subject?.level;
-          console.log('Year level from subject:', yearLevel);
-        } catch (err) {
-          console.error('Error fetching subject:', err);
-        }
-      }
+      const sectionId = course?.section_id;
+      console.log('Course from array:', course, 'Section ID:', sectionId);
       
       try {
-        if (yearLevel) {
+        if (sectionId) {
           const params = new URLSearchParams();
-          params.set('year_level', String(yearLevel));
+          params.set('section_id', String(sectionId));
           console.log('Fetching students with params:', params.toString());
           
           const stuRes = await apiGet(`${API_ENDPOINTS.STUDENTS}?${params.toString()}`);
@@ -150,7 +125,7 @@ const AttendanceHistory: React.FC = () => {
             }))
             .sort((a: Student, b: Student) => a.name.localeCompare(b.name));
         } else {
-          console.warn('Could not determine year_level from course or subject');
+          console.warn('Could not determine section_id from course');
         }
       } catch (stuErr) {
         console.error('Error fetching students list:', stuErr);

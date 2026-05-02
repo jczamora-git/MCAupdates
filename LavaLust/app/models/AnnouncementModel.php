@@ -8,10 +8,52 @@ class AnnouncementModel extends Model
 {
     protected $table = 'announcements';
 
+    private function normalize_metadata_for_storage($metadata)
+    {
+        if ($metadata === null) return null;
+
+        if (is_string($metadata)) {
+            $trimmed = trim($metadata);
+            if ($trimmed === '') return null;
+            $decoded = json_decode($trimmed, true);
+            if (json_last_error() === JSON_ERROR_NONE) {
+                return $trimmed;
+            }
+            return json_encode(['raw' => $metadata], JSON_UNESCAPED_UNICODE);
+        }
+
+        if (is_array($metadata) || is_object($metadata)) {
+            return json_encode($metadata, JSON_UNESCAPED_UNICODE);
+        }
+
+        return json_encode(['raw' => $metadata], JSON_UNESCAPED_UNICODE);
+    }
+
+    private function decode_metadata_value($metadata)
+    {
+        if (!is_string($metadata)) return $metadata;
+        $trimmed = trim($metadata);
+        if ($trimmed === '') return null;
+
+        $decoded = json_decode($trimmed, true);
+        if (json_last_error() === JSON_ERROR_NONE) {
+            return $decoded;
+        }
+
+        return ['raw' => $metadata];
+    }
+
+    private function decode_metadata_row($row)
+    {
+        if (!is_array($row)) return $row;
+        $row['metadata'] = $this->decode_metadata_value($row['metadata'] ?? null);
+        return $row;
+    }
+
     public function get_all($filters = [])
     {
         $query = $this->db->table($this->table)
-            ->select('id, title, message, audience, status, published_at, starts_at, ends_at, created_by, created_at, updated_at');
+            ->select('id, title, message, audience, status, published_at, starts_at, ends_at, created_by, metadata, created_at, updated_at');
 
         if (!empty($filters['audience'])) {
             $query = $query->where('audience', $filters['audience']);
@@ -33,15 +75,19 @@ class AnnouncementModel extends Model
             $query = $query->where_group_end();
         }
 
-        return $query->order_by('published_at', 'DESC')->get_all();
+        $rows = $query->order_by('published_at', 'DESC')->get_all();
+        if (!is_array($rows)) return $rows;
+        return array_map([$this, 'decode_metadata_row'], $rows);
     }
 
     public function get_announcement($id)
     {
-        return $this->db->table($this->table)
-            ->select('id, title, message, audience, status, published_at, starts_at, ends_at, created_by, created_at, updated_at')
+        $row = $this->db->table($this->table)
+            ->select('id, title, message, audience, status, published_at, starts_at, ends_at, created_by, metadata, created_at, updated_at')
             ->where('id', $id)
             ->get();
+
+        return $this->decode_metadata_row($row);
     }
 
     public function create($data)
@@ -60,6 +106,10 @@ class AnnouncementModel extends Model
             'updated_at' => $now,
         ];
 
+        if (array_key_exists('metadata', $data)) {
+            $insert['metadata'] = $this->normalize_metadata_for_storage($data['metadata']);
+        }
+
         $res = $this->db->table($this->table)->insert($insert);
         if ($res === false) return false;
         if (is_int($res)) return $res;
@@ -69,10 +119,17 @@ class AnnouncementModel extends Model
     public function update_announcement($id, $data)
     {
         $data['updated_at'] = app_now();
-        $allowed = ['title','message','audience','status','published_at','starts_at','ends_at','updated_at'];
+        $allowed = ['title','message','audience','status','published_at','starts_at','ends_at','metadata','updated_at'];
         $update = [];
         foreach ($data as $k => $v) {
-            if (in_array($k, $allowed)) $update[$k] = $v;
+            if (!in_array($k, $allowed)) {
+                continue;
+            }
+            if ($k === 'metadata') {
+                $update[$k] = $this->normalize_metadata_for_storage($v);
+                continue;
+            }
+            $update[$k] = $v;
         }
         return $this->db->table($this->table)->where('id', $id)->update($update);
     }
@@ -124,13 +181,34 @@ class AnnouncementModel extends Model
             $params[] = $s;
         }
 
+        if (!empty($filters['student_visibility'])) {
+            $sectionId = $filters['student_section_id'] ?? null;
+            $studentClauses = [];
+
+            $studentClauses[] = "a.audience = 'all'";
+
+            $studentAudience = "(a.audience = 'students' AND (a.metadata IS NULL OR a.metadata = '' OR JSON_UNQUOTE(JSON_EXTRACT(a.metadata, '$.scope')) IS NULL OR JSON_UNQUOTE(JSON_EXTRACT(a.metadata, '$.scope')) != 'class'";
+
+            if (!empty($sectionId)) {
+                $studentAudience .= " OR (JSON_UNQUOTE(JSON_EXTRACT(a.metadata, '$.scope')) = 'class' AND JSON_UNQUOTE(JSON_EXTRACT(a.metadata, '$.section_id')) = ?";
+                $params[] = (string)$sectionId;
+
+                $studentAudience .= ")";
+            }
+
+            $studentAudience .= "))";
+            $studentClauses[] = $studentAudience;
+
+            $where_clauses[] = '(' . implode(' OR ', $studentClauses) . ')';
+        }
+
         $where_sql = count($where_clauses) ? 'WHERE ' . implode(' AND ', $where_clauses) : '';
 
         if ($user_id) {
             $sql = "
                 SELECT a.id, a.title, a.message, a.audience, a.status,
                        a.published_at, a.starts_at, a.ends_at, a.created_by,
-                       a.created_at, a.updated_at,
+                       a.metadata, a.created_at, a.updated_at,
                        CASE WHEN ar.id IS NOT NULL THEN 1 ELSE 0 END AS is_read,
                        ar.read_at
                 FROM announcements a
@@ -143,7 +221,7 @@ class AnnouncementModel extends Model
             $sql = "
                 SELECT a.id, a.title, a.message, a.audience, a.status,
                        a.published_at, a.starts_at, a.ends_at, a.created_by,
-                       a.created_at, a.updated_at,
+                       a.metadata, a.created_at, a.updated_at,
                        0 AS is_read, NULL AS read_at
                 FROM announcements a
                 $where_sql
@@ -152,7 +230,9 @@ class AnnouncementModel extends Model
         }
 
         $stmt = $this->db->raw($sql, $params);
-        return $stmt ? $stmt->fetchAll(\PDO::FETCH_ASSOC) : [];
+        $rows = $stmt ? $stmt->fetchAll(\PDO::FETCH_ASSOC) : [];
+        if (!is_array($rows)) return $rows;
+        return array_map([$this, 'decode_metadata_row'], $rows);
     }
 
     /**

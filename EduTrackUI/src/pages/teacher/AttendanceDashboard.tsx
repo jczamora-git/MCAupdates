@@ -38,7 +38,7 @@ const AttendanceDashboard: React.FC = () => {
   const [subjectModalOpen, setSubjectModalOpen] = useState(false);
   const [selectedSubjectForModal, setSelectedSubjectForModal] = useState<any | null>(null);
   const [currentTime, setCurrentTime] = useState(new Date());
-  const [allSubjectsAttendance, setAllSubjectsAttendance] = useState<Record<string, any[]>>({});
+  const [attendanceLogsByCourseId, setAttendanceLogsByCourseId] = useState<Record<string, any>>({});
   const [viewingMonth, setViewingMonth] = useState(new Date());
   const [selectedDate, setSelectedDate] = useState(new Date());
   
@@ -67,7 +67,7 @@ const AttendanceDashboard: React.FC = () => {
   // Fetch all subjects attendance when courses are loaded
   useEffect(() => {
     if (courses.length > 0 && showDashboard) {
-      fetchAllSubjectsAttendance(selectedDate);
+      fetchAttendanceLogs(selectedDate);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [courses, showDashboard, selectedDate]);
@@ -175,27 +175,31 @@ const AttendanceDashboard: React.FC = () => {
     return `${y}-${m}-${d}`;
   };
 
-  const fetchAllSubjectsAttendance = async (date: Date) => {
+  const fetchAttendanceLogs = async (date: Date) => {
     const dayKey = toLocalYmd(date);
-    const attendanceMap: Record<string, any[]> = {};
+    try {
+      const res = await apiGet(`${API_ENDPOINTS.ATTENDANCE_LOGS}?date=${encodeURIComponent(dayKey)}`);
+      const logs = res.logs ?? res.data?.logs ?? res.data ?? [];
+      const map: Record<string, any> = {};
 
-    for (const course of courses) {
-      try {
-        const res = await apiGet(`${API_ENDPOINTS.ATTENDANCE_COURSE(parseInt(course.id))}`);
-        const records = Array.isArray(res.data) ? res.data : Array.isArray(res) ? res : [];
-        
-        const todayRecords = records.filter((r: any) => {
-          const recordDate = new Date(r.created_at).toISOString().split('T')[0];
-          return recordDate === dayKey;
+      if (Array.isArray(logs)) {
+        logs.forEach((log: any) => {
+          const courseId = String(log.course_id ?? log.subject_id ?? log.id ?? '');
+          if (!courseId) return;
+          map[courseId] = {
+            present: Number(log.present ?? 0),
+            late: Number(log.late ?? 0),
+            absent: Number(log.absent ?? 0),
+            excused: Number(log.excused ?? 0),
+            total: Number(log.total ?? 0)
+          };
         });
-        
-        attendanceMap[course.id] = todayRecords;
-      } catch (e) {
-        attendanceMap[course.id] = [];
       }
-    }
 
-    setAllSubjectsAttendance(attendanceMap);
+      setAttendanceLogsByCourseId(map);
+    } catch (e) {
+      setAttendanceLogsByCourseId({});
+    }
   };
 
   const fetchStudentsBySection = async () => {
@@ -539,10 +543,10 @@ const AttendanceDashboard: React.FC = () => {
                 <div className="grid grid-cols-2 sm:grid-cols-3 gap-2 sm:gap-3">
                   {courses.length > 0 ? (
                     courses.map((course) => {
-                      const records = allSubjectsAttendance[course.id] || [];
-                      const hasRecords = records.length > 0;
-                      const presentCount = records.filter((r) => r.status === 'present').length;
-                      const totalCount = records.length;
+                      const log = attendanceLogsByCourseId[String(course.id)] || null;
+                      const hasRecords = !!log && Number(log.total) > 0;
+                      const presentCount = Number(log?.present ?? 0);
+                      const totalCount = Number(log?.total ?? 0);
 
                       return (
                         <button
@@ -632,14 +636,14 @@ const AttendanceDashboard: React.FC = () => {
                   <tbody>
                     {courses.length > 0 ? (
                       courses.map((course, idx) => {
-                        const attendanceRecords = allSubjectsAttendance[course.id] || [];
-                        const hasRecords = attendanceRecords.length > 0;
+                        const log = attendanceLogsByCourseId[String(course.id)] || null;
+                        const hasRecords = !!log && Number(log.total) > 0;
 
-                        const presentCount = attendanceRecords.filter(r => r.status === 'present').length;
-                        const lateCount = attendanceRecords.filter(r => r.status === 'late').length;
-                        const absentCount = attendanceRecords.filter(r => r.status === 'absent').length;
-                        const excusedCount = attendanceRecords.filter(r => r.status === 'excused').length;
-                        const totalCount = attendanceRecords.length;
+                        const presentCount = Number(log?.present ?? 0);
+                        const lateCount = Number(log?.late ?? 0);
+                        const absentCount = Number(log?.absent ?? 0);
+                        const excusedCount = Number(log?.excused ?? 0);
+                        const totalCount = Number(log?.total ?? 0);
                         const presentPct = totalCount > 0 ? Math.round((presentCount / totalCount) * 100) : 0;
 
                         return (
@@ -708,13 +712,13 @@ const AttendanceDashboard: React.FC = () => {
               <div className="md:hidden space-y-4 p-4">
                 {courses.length > 0 ? (
                   courses.map((course) => {
-                    const attendanceRecords = allSubjectsAttendance[course.id] || [];
-                    const hasRecords = attendanceRecords.length > 0;
-                    const presentCount = attendanceRecords.filter(r => r.status === 'present').length;
-                    const lateCount = attendanceRecords.filter(r => r.status === 'late').length;
-                    const absentCount = attendanceRecords.filter(r => r.status === 'absent').length;
-                    const excusedCount = attendanceRecords.filter(r => r.status === 'excused').length;
-                    const totalCount = attendanceRecords.length;
+                    const log = attendanceLogsByCourseId[String(course.id)] || null;
+                    const hasRecords = !!log && Number(log.total) > 0;
+                    const presentCount = Number(log?.present ?? 0);
+                    const lateCount = Number(log?.late ?? 0);
+                    const absentCount = Number(log?.absent ?? 0);
+                    const excusedCount = Number(log?.excused ?? 0);
+                    const totalCount = Number(log?.total ?? 0);
                     const presentPct = totalCount > 0 ? Math.round((presentCount / totalCount) * 100) : 0;
 
                     return (

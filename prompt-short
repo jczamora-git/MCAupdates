@@ -1,0 +1,55 @@
+Fix [FEATURE NAME].
+
+Project context:
+- Frontend: EduTrackUI
+- Backend/API: LavaLust
+- LavaLust is not Laravel. Follow existing LavaLust patterns.
+- Do not rewrite unrelated modules.
+- Do not break existing working flows.
+
+Affected page:
+- [route/page]
+
+Relevant files to inspect:
+Frontend:
+- [file]
+- [file]
+
+Backend:
+- [controller]
+- [model]
+- [route file]
+
+Database fields to use:
+- [table.field]
+- [table.field]
+
+Problem:
+[Explain current wrong behavior.]
+
+Expected behavior:
+[Explain correct behavior.]
+
+Rules:
+- [Rule 1]
+- [Rule 2]
+- [Rule 3]
+- Backend must enforce this too, not frontend only.
+
+Implementation tasks:
+1. Inspect the current frontend-backend flow first.
+2. Fix frontend display/action behavior.
+3. Fix backend API response if missing fields.
+4. Fix backend save/update logic if needed.
+5. Add backend validation/enforcement.
+6. Keep existing UI style.
+7. Do not use missing tables/columns.
+
+Testing:
+1. [test step]
+2. [test step]
+3. [test step]
+4. Test direct URL/API access if relevant.
+
+Required final response:
+List changed files, endpoints touched, DB fields used, assumptions, migration needed or not, and manual testing steps.

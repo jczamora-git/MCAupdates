@@ -365,9 +365,9 @@ export const Sidebar = () => {
   const teacherLinks = [
     { to: "/teacher/dashboard", icon: BarChart3, label: "Dashboard" },
     ...(FEATURES.adviserEnrollment && isTeacherAdviser ? [{ to: "/admin/enrollments", icon: ClipboardList, label: "Enrollments" }] : []),
-    ...(FEATURES.courses ? [{ to: "/teacher/courses", icon: BookOpen, label: "My Courses" }] : []),
-    ...(FEATURES.messages ? [{ to: "/teacher/messages", icon: Mail, label: "Messages" }] : []),
-    ...(FEATURES.activities ? [{ to: "/teacher/activities", icon: ClipboardList, label: "Activities" }] : []),
+    ...(FEATURES.courses ? [{ to: "/teacher/courses", icon: BookOpen, label: "My Classes" }] : []),
+    // ...(FEATURES.messages ? [{ to: "/teacher/messages", icon: Mail, label: "Messages" }] : []),
+    // ...(FEATURES.activities ? [{ to: "/teacher/activities", icon: ClipboardList, label: "Activities" }] : []),
     ...(FEATURES.attendance ? [{ to: "/teacher/attendance", icon: Calendar, label: "Attendance" }] : []),
     ...(FEATURES.grading ? [{ to: "/teacher/grades", icon: Award, label: "Grade Input" }] : []),
     ...(FEATURES.announcements ? [{ to: "/teacher/announcements", icon: Bell, label: "Announcements" }] : []),

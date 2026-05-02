@@ -95,7 +95,7 @@ class StudentModel extends Model
             $search = '%' . $filters['search'] . '%';
             $sql = "SELECT 
                         students.id, students.user_id, students.student_id, students.rfid_card, students.gender, students.year_level, students.section_id, students.status, students.graduated_at, students.graduation_batch, students.created_at, students.updated_at, 
-                        users.email, users.first_name, users.last_name, users.phone, users.profile_photo_path, users.status as user_status, users.role
+                        users.email, users.first_name, users.middle_name, users.last_name, users.phone, users.profile_photo_path, users.status as user_status, users.role
                     FROM students
                     JOIN users ON students.user_id = users.id
                     WHERE (
@@ -134,7 +134,7 @@ class StudentModel extends Model
             // No search - use query builder
             $query = $this->db->table($this->table)
                       ->join('users', 'students.user_id = users.id')
-                      ->select('students.id, students.user_id, students.student_id, students.rfid_card, students.gender, students.year_level, students.section_id, students.status, students.graduated_at, students.graduation_batch, students.created_at, students.updated_at, users.email, users.first_name, users.last_name, users.phone, users.profile_photo_path, users.status as user_status, users.role');
+                      ->select('students.id, students.user_id, students.student_id, students.rfid_card, students.gender, students.year_level, students.section_id, students.status, students.graduated_at, students.graduation_batch, students.created_at, students.updated_at, users.email, users.first_name, users.middle_name, users.last_name, users.phone, users.profile_photo_path, users.status as user_status, users.role');
 
             // Status filter
             if (!empty($filters['status'])) {

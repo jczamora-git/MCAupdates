@@ -45,6 +45,7 @@ interface Activity {
   max_score: number;
   due_at: string;
   type: string;
+  allow_late_submission?: number;
 }
 
 interface QuizSettings {
@@ -54,6 +55,8 @@ interface QuizSettings {
   shuffle_choices?: boolean;
   show_correct_answers?: boolean;
   pass_threshold?: number;
+  available_from?: string;
+  available_until?: string;
   section_directions?: Record<string, string>;
   section_word_boxes?: Record<string, string>;
 }
@@ -97,9 +100,17 @@ const QuizTaker = () => {
   const autoSaveTimerRef = useRef<NodeJS.Timeout | null>(null);
   const timerRef = useRef<NodeJS.Timeout | null>(null);
   const saveDebounceRef = useRef<NodeJS.Timeout | null>(null);
+  const availabilityErrorShown = useRef(false);
   // Always-current snapshot of answers so setInterval/setTimeout closures never go stale
   const answersRef = useRef(answers);
   useEffect(() => { answersRef.current = answers; }, [answers]);
+
+  const parseDateTime = (value?: string | null) => {
+    if (!value) return null;
+    const cleaned = String(value).includes('T') ? String(value) : String(value).replace(' ', 'T');
+    const parsed = new Date(cleaned);
+    return isNaN(parsed.getTime()) ? null : parsed;
+  };
 
   // ── Build matchingData from a session's matching_order + questions list ──
   const buildMatchingData = (
@@ -279,8 +290,21 @@ const QuizTaker = () => {
 
   const startQuiz = async () => {
     try {
+      if (availability.isNotYetAvailable) {
+        setAlert({ type: 'error', message: 'This quiz is not yet available.' });
+        return;
+      }
+      if (availability.isClosed) {
+        setAlert({ type: 'error', message: 'This quiz is already closed.' });
+        return;
+      }
+
       // api_start_quiz creates the session row (with shuffled order stored)
-      await apiGet(`${API_ENDPOINTS.ACTIVITIES}/${activityId}/quiz/start`);
+      const startRes = await apiGet(`${API_ENDPOINTS.ACTIVITIES}/${activityId}/quiz/start`);
+      if (!startRes || startRes.success === false) {
+        setAlert({ type: 'error', message: startRes?.message || 'Failed to start quiz' });
+        return;
+      }
 
       // Now fetch the persisted session to get question_order & matching_order
       const sessionRes = await apiGet(`${API_ENDPOINTS.ACTIVITIES}/${activityId}/quiz/session`);
@@ -327,17 +351,34 @@ const QuizTaker = () => {
     const currentAnswers = answersRef.current;
     if (Object.keys(currentAnswers).length === 0) return;
 
+    if (availability.isClosed) {
+      if (!availabilityErrorShown.current) {
+        setAlert({ type: 'error', message: 'This quiz is already closed.' });
+        availabilityErrorShown.current = true;
+      }
+      return;
+    }
+
     try {
       setAutoSaveStatus('saving');
       
       for (const [questionId, answer] of Object.entries(currentAnswers)) {
-        await apiPost(`${API_ENDPOINTS.ACTIVITIES}/${activityId}/quiz/save-answer`, {
+        const res = await apiPost(`${API_ENDPOINTS.ACTIVITIES}/${activityId}/quiz/save-answer`, {
           question_id: Number(questionId),
           choice_id: answer.choice_id,
           answer_text: answer.answer_text,
           selected_choices: answer.selected_choices,
           matching_pairs: answer.matching_pairs
         });
+
+        if (!res || res.success === false) {
+          if (!availabilityErrorShown.current && res?.message) {
+            setAlert({ type: 'error', message: res.message });
+            availabilityErrorShown.current = true;
+          }
+          setAutoSaveStatus('unsaved');
+          return;
+        }
       }
 
       setAutoSaveStatus('saved');
@@ -381,6 +422,11 @@ const QuizTaker = () => {
 
   const handleSubmitQuiz = async () => {
     try {
+      if (availability.isClosed) {
+        setAlert({ type: 'error', message: 'This quiz is already closed.' });
+        return;
+      }
+
       setSubmitting(true);
 
       // Clear all timers
@@ -878,6 +924,16 @@ const QuizTaker = () => {
   const currentQuestion = questions[currentQuestionIndex];
   const isLastQuestion = currentQuestionIndex === questions.length - 1;
   const answeredCount = Object.keys(answers).length;
+  const availability = (() => {
+    const availableFrom = parseDateTime(settings.available_from);
+    const availableUntil = parseDateTime(settings.available_until || activity?.due_at || null);
+    const allowLate = Boolean(activity?.allow_late_submission);
+    const now = Date.now();
+    const isNotYetAvailable = availableFrom ? now < availableFrom.getTime() : false;
+    const isClosed = availableUntil ? now > availableUntil.getTime() && !allowLate : false;
+    const isLateAllowed = availableUntil ? now > availableUntil.getTime() && allowLate : false;
+    return { availableFrom, availableUntil, isNotYetAvailable, isClosed, isLateAllowed };
+  })();
 
   // Section/grouping helpers — derived from the loaded questions order
   const toRoman = (n: number): string => {
@@ -1007,7 +1063,54 @@ const QuizTaker = () => {
                     <div className="text-2xl font-bold text-green-700">{settings.max_attempts}</div>
                   </div>
                 )}
+                {availability.availableFrom && (
+                  <div className="p-4 bg-indigo-50 border border-indigo-200 rounded-lg">
+                    <div className="text-sm text-indigo-600 font-semibold">Available From</div>
+                    <div className="text-sm font-bold text-indigo-700">
+                      {availability.availableFrom.toLocaleString()}
+                    </div>
+                  </div>
+                )}
+                {availability.availableUntil && (
+                  <div className="p-4 bg-rose-50 border border-rose-200 rounded-lg">
+                    <div className="text-sm text-rose-600 font-semibold">Available Until</div>
+                    <div className="text-sm font-bold text-rose-700">
+                      {availability.availableUntil.toLocaleString()}
+                    </div>
+                  </div>
+                )}
               </div>
+
+              {(availability.isNotYetAvailable || availability.isClosed || availability.isLateAllowed) && (
+                <div className={`border rounded-lg p-4 mb-6 ${
+                  availability.isClosed
+                    ? 'bg-red-50 border-red-200'
+                    : availability.isNotYetAvailable
+                    ? 'bg-indigo-50 border-indigo-200'
+                    : 'bg-amber-50 border-amber-200'
+                }`}>
+                  <div className="flex items-start gap-3">
+                    <AlertCircle className={`h-5 w-5 mt-0.5 ${
+                      availability.isClosed
+                        ? 'text-red-600'
+                        : availability.isNotYetAvailable
+                        ? 'text-indigo-600'
+                        : 'text-amber-600'
+                    }`} />
+                    <div className="text-sm">
+                      {availability.isClosed && (
+                        <p className="text-red-700 font-semibold">This quiz is closed and no late submissions are allowed.</p>
+                      )}
+                      {availability.isNotYetAvailable && (
+                        <p className="text-indigo-700 font-semibold">This quiz is not yet available.</p>
+                      )}
+                      {availability.isLateAllowed && (
+                        <p className="text-amber-700 font-semibold">This quiz is past the due date but late submissions are allowed.</p>
+                      )}
+                    </div>
+                  </div>
+                </div>
+              )}
 
               <div className="bg-yellow-50 border border-yellow-200 rounded-lg p-4 mb-6">
                 <div className="flex items-start gap-3">
@@ -1025,7 +1128,8 @@ const QuizTaker = () => {
 
               <Button
                 onClick={startQuiz}
-                className="w-full bg-gradient-to-r from-blue-600 to-purple-600 text-white py-6 text-lg"
+                disabled={availability.isNotYetAvailable || availability.isClosed}
+                className="w-full bg-gradient-to-r from-blue-600 to-purple-600 text-white py-6 text-lg disabled:opacity-60"
               >
                 <BookOpen className="h-5 w-5 mr-2" />
                 Start Quiz

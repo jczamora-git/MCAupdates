@@ -86,6 +86,27 @@ interface QuizSettings {
   section_word_boxes?: Record<string, string>;
 }
 
+const toDatetimeLocal = (value?: string | null) => {
+  if (!value) return '';
+  const trimmed = String(value).trim();
+  if (!trimmed) return '';
+  if (trimmed.includes('T')) return trimmed.slice(0, 16);
+  if (trimmed.includes(' ')) return trimmed.replace(' ', 'T').slice(0, 16);
+  if (/^\d{4}-\d{2}-\d{2}$/.test(trimmed)) return `${trimmed}T23:59`;
+  return trimmed;
+};
+
+const normalizeDatetimeForApi = (value?: string) => {
+  if (!value) return null;
+  const trimmed = value.trim();
+  if (!trimmed) return null;
+  if (trimmed.includes('T')) {
+    const withSpace = trimmed.replace('T', ' ');
+    return withSpace.length === 16 ? `${withSpace}:00` : withSpace;
+  }
+  return trimmed;
+};
+
 // Sortable Question Item Component
 interface SortableQuestionItemProps {
   question: Question;
@@ -319,13 +340,32 @@ const QuizBuilder = () => {
   const fetchQuizSettings = async () => {
     try {
       const res = await apiGet(`${API_ENDPOINTS.ACTIVITIES}/${activityId}/settings`);
-      if (res && res.success && res.data) {
-        setQuizSettings(res.data);
+      if (res && res.success) {
+        const merged = { ...(res.data || {}) } as QuizSettings;
+        if (!merged.available_until && activity?.due_at) {
+          merged.available_until = activity.due_at;
+        }
+        if (merged.available_from) {
+          merged.available_from = toDatetimeLocal(merged.available_from);
+        }
+        if (merged.available_until) {
+          merged.available_until = toDatetimeLocal(merged.available_until);
+        }
+        setQuizSettings(prev => ({ ...prev, ...merged }));
       }
     } catch (error) {
       console.error('Error fetching quiz settings:', error);
     }
   };
+
+  useEffect(() => {
+    if (activity?.due_at && !quizSettings.available_until) {
+      setQuizSettings(prev => ({
+        ...prev,
+        available_until: toDatetimeLocal(activity.due_at)
+      }));
+    }
+  }, [activity?.due_at, quizSettings.available_until]);
 
   const resetQuestionForm = () => {
     setQuestionType('multiple_choice');
@@ -535,7 +575,12 @@ const QuizBuilder = () => {
   const saveQuizSettings = async () => {
     setIsSaving(true);
     try {
-      const res = await apiPost(`${API_ENDPOINTS.ACTIVITIES}/${activityId}/settings`, quizSettings);
+      const payload = {
+        ...quizSettings,
+        available_from: normalizeDatetimeForApi(quizSettings.available_from),
+        available_until: normalizeDatetimeForApi(quizSettings.available_until)
+      };
+      const res = await apiPost(`${API_ENDPOINTS.ACTIVITIES}/${activityId}/settings`, payload);
       if (res && res.success) {
         setAlert({ type: 'success', message: 'Quiz settings saved' });
         setIsSettingsOpen(false);

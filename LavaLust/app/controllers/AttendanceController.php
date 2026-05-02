@@ -289,6 +289,82 @@ class AttendanceController extends Controller
     }
 
     /**
+     * Get attendance logs grouped by course for a given date
+     * GET /api/attendance/logs?date=YYYY-MM-DD
+     */
+    public function api_get_attendance_logs()
+    {
+        api_set_json_headers();
+
+        if (!$this->session->userdata('logged_in')) {
+            http_response_code(401);
+            echo json_encode([
+                'success' => false,
+                'message' => 'Unauthorized'
+            ]);
+            return;
+        }
+
+        $role = (string)($this->session->userdata('role') ?? '');
+        if ($role !== 'teacher') {
+            http_response_code(403);
+            echo json_encode([
+                'success' => false,
+                'message' => 'Forbidden'
+            ]);
+            return;
+        }
+
+        try {
+            $teacher_id = (int)$this->session->userdata('user_id');
+            $date = isset($_GET['date']) ? trim((string)$_GET['date']) : app_today();
+
+            if ($teacher_id <= 0) {
+                http_response_code(400);
+                echo json_encode([
+                    'success' => false,
+                    'message' => 'Invalid teacher id'
+                ]);
+                return;
+            }
+
+            $sql = "
+                SELECT
+                    a.course_id,
+                    s.course_code,
+                    s.name AS subject_name,
+                    SUM(CASE WHEN a.status = 'present' THEN 1 ELSE 0 END) AS present,
+                    SUM(CASE WHEN a.status = 'late' THEN 1 ELSE 0 END) AS late,
+                    SUM(CASE WHEN a.status = 'absent' THEN 1 ELSE 0 END) AS absent,
+                    SUM(CASE WHEN a.status = 'excused' THEN 1 ELSE 0 END) AS excused,
+                    COUNT(*) AS total
+                FROM attendance a
+                LEFT JOIN subjects s ON s.id = a.course_id
+                WHERE a.teacher_id = ?
+                  AND DATE(a.created_at) = ?
+                GROUP BY a.course_id, s.course_code, s.name
+                ORDER BY s.course_code ASC
+            ";
+
+            $stmt = $this->db->raw($sql, [$teacher_id, $date]);
+            $logs = $stmt ? ($stmt->fetchAll(PDO::FETCH_ASSOC) ?: []) : [];
+
+            http_response_code(200);
+            echo json_encode([
+                'success' => true,
+                'date' => $date,
+                'logs' => $logs
+            ]);
+        } catch (Exception $e) {
+            http_response_code(500);
+            echo json_encode([
+                'success' => false,
+                'message' => 'Server error: ' . $e->getMessage()
+            ]);
+        }
+    }
+
+    /**
      * Bulk insert attendance records
      * POST /api/attendance/bulk
      * 

@@ -368,6 +368,12 @@ class QuizController extends Controller {
                 }
             }
 
+            if (!empty($settingsData['available_until'])) {
+                $this->ActivityModel->update($activityId, [
+                    'due_at' => $settingsData['available_until']
+                ]);
+            }
+
             http_response_code(200);
             echo json_encode([
                 'success' => true,
@@ -396,6 +402,9 @@ class QuizController extends Controller {
             }
 
             $settings = $this->Quiz_model->get_settings_by_activity($activityId);
+            if (!$settings) {
+                $settings = [];
+            }
             if ($settings) {
                 if (isset($settings['section_directions']) && is_string($settings['section_directions'])) {
                     $settings['section_directions'] = json_decode($settings['section_directions'], true);
@@ -403,6 +412,10 @@ class QuizController extends Controller {
                 if (isset($settings['section_word_boxes']) && is_string($settings['section_word_boxes'])) {
                     $settings['section_word_boxes'] = json_decode($settings['section_word_boxes'], true);
                 }
+            }
+
+            if (empty($settings['available_until']) && !empty($activity['due_at'])) {
+                $settings['available_until'] = $activity['due_at'];
             }
 
             http_response_code(200);
@@ -451,6 +464,13 @@ class QuizController extends Controller {
 
             // Get quiz settings
             $settings = $this->Quiz_model->get_settings_by_activity($activityId);
+
+            $availability = $this->get_quiz_availability($activity, $settings);
+            if (!$availability['allowed']) {
+                http_response_code($availability['code']);
+                echo json_encode(['success' => false, 'message' => $availability['message']]);
+                return;
+            }
 
             // Check if student has exceeded attempts
             if ($settings && $settings['max_attempts']) {
@@ -637,6 +657,21 @@ class QuizController extends Controller {
             }
             $studentId = $student['id'];
 
+            $activity = $this->ActivityModel->get_activity($activityId);
+            if (!$activity) {
+                http_response_code(404);
+                echo json_encode(['success' => false, 'message' => 'Quiz not found']);
+                return;
+            }
+
+            $settings = $this->Quiz_model->get_settings_by_activity($activityId);
+            $availability = $this->get_quiz_availability($activity, $settings);
+            if (!$availability['allowed']) {
+                http_response_code($availability['code']);
+                echo json_encode(['success' => false, 'message' => $availability['message']]);
+                return;
+            }
+
             $answerText = $input['answer_text'] ?? null;
 
             // Encode multiple_select choices as JSON
@@ -706,6 +741,21 @@ class QuizController extends Controller {
                 return;
             }
             $studentId = $student['id'];
+
+            $activity = $this->ActivityModel->get_activity($activityId);
+            if (!$activity) {
+                http_response_code(404);
+                echo json_encode(['success' => false, 'message' => 'Quiz not found']);
+                return;
+            }
+
+            $settings = $this->Quiz_model->get_settings_by_activity($activityId);
+            $availability = $this->get_quiz_availability($activity, $settings);
+            if (!$availability['allowed']) {
+                http_response_code($availability['code']);
+                echo json_encode(['success' => false, 'message' => $availability['message']]);
+                return;
+            }
 
             // First, save all answers to activity_student_answers
             if (isset($input['answers']) && is_array($input['answers'])) {
@@ -1071,5 +1121,35 @@ class QuizController extends Controller {
         if (!is_string($string)) return false;
         json_decode($string);
         return (json_last_error() == JSON_ERROR_NONE);
+    }
+
+    private function get_quiz_availability($activity, $settings) {
+        $now = time();
+
+        $availableFrom = null;
+        if ($settings && !empty($settings['available_from'])) {
+            $availableFrom = strtotime($settings['available_from']);
+        }
+
+        $availableUntilRaw = null;
+        if ($settings && !empty($settings['available_until'])) {
+            $availableUntilRaw = $settings['available_until'];
+        }
+        if (!$availableUntilRaw && !empty($activity['due_at'])) {
+            $availableUntilRaw = $activity['due_at'];
+        }
+
+        $availableUntil = $availableUntilRaw ? strtotime($availableUntilRaw) : null;
+        $allowLate = !empty($activity['allow_late_submission']);
+
+        if ($availableFrom && $now < $availableFrom) {
+            return ['allowed' => false, 'code' => 403, 'message' => 'Quiz is not yet available'];
+        }
+
+        if ($availableUntil && $now > $availableUntil && !$allowLate) {
+            return ['allowed' => false, 'code' => 403, 'message' => 'Quiz is already closed'];
+        }
+
+        return ['allowed' => true, 'code' => 200, 'message' => 'OK'];
     }
 }

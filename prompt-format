@@ -1,0 +1,268 @@
+Fix [FEATURE / MODULE NAME] for [USER ROLE / PAGE / FLOW].
+
+Important project context:
+- Frontend is EduTrackUI.
+- Backend/API is LavaLust.
+- LavaLust is NOT Laravel. Do not use Laravel syntax, Laravel routing, Eloquent, migrations, Request classes, Artisan, or Laravel helpers.
+- Follow the existing LavaLust controller/model/route conventions already used in this project.
+- Do not rewrite unrelated modules.
+- Do not break existing working features related to this module.
+- Before editing, inspect the related files and understand the current frontend-backend flow.
+
+Affected pages / routes:
+1. [Page name / route]
+   Example: /teacher/courses/:courseId
+2. [Page name / route]
+   Example: /student/courses/:courseId
+3. [Any modal or detail page involved]
+
+Relevant frontend files to inspect:
+- EduTrackUI/src/pages/[role]/[FileName].tsx
+- EduTrackUI/src/components/[ComponentName].tsx
+- EduTrackUI/src/lib/api.ts
+- [Other related frontend files]
+
+Relevant backend files to inspect:
+- LavaLust/app/controllers/[ControllerName].php
+- LavaLust/app/models/[ModelName].php
+- LavaLust route file where the related API routes are registered
+- Any related model/controller/service used by this feature
+
+Database schema notes from current DB:
+[table_name] table uses:
+- id
+- [column_1]
+- [column_2]
+- [column_3]
+
+[related_table_name] table uses:
+- id
+- [foreign_key]
+- [column_1]
+- [column_2]
+
+Important:
+Use the actual DB column names above.
+Do not invent tables or columns.
+Do not use missing tables such as [example_missing_table] unless the schema confirms it exists.
+
+Main problems to fix:
+1. [Problem 1]
+2. [Problem 2]
+3. [Problem 3]
+4. [Problem 4]
+5. Backend must also enforce the rule, not only the frontend.
+
+Core rules:
+- [Rule 1]
+- [Rule 2]
+- [Rule 3]
+- Effective logic:
+  [computed_field] = [field_a] ?? [field_b] ?? [fallback]
+- User can do [action] only when:
+  [condition_1]
+  OR [condition_2]
+- If [blocked condition]:
+  block [frontend action], direct page access, and backend API request.
+
+PART A — Frontend UI/data loading fix
+
+In [FrontendFileName].tsx:
+1. Find the current data fetching logic.
+2. Replace/fix it to use the correct endpoint:
+   - [GET /api/example]
+   - [POST /api/example]
+3. Store these fields in state:
+   - [field_1]
+   - [field_2]
+   - [field_3]
+4. Show saved values if they exist.
+5. Add safe fallbacks if values are missing/null.
+6. Keep the existing UI design.
+7. Do not remove unrelated components.
+
+PART B — Frontend form/save behavior
+
+In [Form or Modal Component]:
+1. Make sure the form uses the actual DB/API fields:
+   - [actual_field_name]
+   - [actual_field_name]
+2. If the frontend currently uses old/wrong field names, map them correctly:
+   - frontend [old_field] should map to backend [actual_field]
+3. On save:
+   - send all required fields to backend
+   - use correct API helper
+   - show success/error toast
+   - refetch data or update local state after save
+4. Reopening the modal/page should show the saved values.
+
+PART C — Backend persistence fix
+
+In LavaLust backend:
+1. Ensure GET [endpoint] returns the actual stored data.
+2. If no row exists, return safe defaults:
+   - [default_field] = [default_value]
+   - [default_field] = [default_value]
+3. Ensure POST/PUT [endpoint] saves or updates the correct table.
+4. Save all fields:
+   - [field_1]
+   - [field_2]
+   - [field_3]
+5. Convert booleans to 0/1 if needed.
+6. Format datetime for MySQL as:
+   YYYY-MM-DD HH:mm:ss
+7. Use the existing LavaLust DB/query style already used in this project.
+
+PART D — Frontend access/display rules
+
+In [Student/Teacher/User Page]:
+1. Find the card/button/action that currently displays incorrectly.
+2. Add helper functions if needed:
+
+function toBool(value) {
+  return value === true || value === 1 || value === "1" || value === "true";
+}
+
+function getEffectiveValue(item) {
+  return (
+    item?.[primary_field] ||
+    item?.[fallback_field] ||
+    item?.[another_fallback] ||
+    null
+  );
+}
+
+function canPerformAction(item) {
+  // return true or false based on the core rules
+}
+
+3. If canPerformAction(item) is true:
+   - show/enable [button/action]
+4. If canPerformAction(item) is false:
+   - hide/disable [button/action]
+   - show message:
+     "[User-friendly blocked message]"
+5. Before navigate() or submit(), check canPerformAction(item) again.
+6. Keep existing badges/status display visible.
+
+PART E — Direct page/API guard
+
+In [Direct Page Component], such as [QuizTaker.tsx / Detail Page]:
+1. On page load, fetch the latest backend status.
+2. If backend says blocked:
+   - show a blocking screen/message
+   - do not load restricted data
+   - do not allow save/submit
+3. If allowed:
+   - continue existing flow.
+
+PART F — Backend enforcement
+
+In [ControllerName].php or the controller handling:
+- [endpoint 1]
+- [endpoint 2]
+- [endpoint 3]
+
+Add or reuse a shared helper method following LavaLust style:
+
+private function check_[feature]_availability($id) {
+  // fetch main record
+  // fetch related settings if needed
+  // compute effective rule
+  // return allowed/blocked result
+}
+
+Rules:
+1. If [condition A]:
+   reject with:
+   success false
+   message "[Message A]"
+
+2. If [condition B]:
+   reject with:
+   success false
+   message "[Message B]"
+
+3. If allowed:
+   continue normally.
+
+4. Do not rely only on frontend.
+5. This must also block direct API access.
+
+PART G — Make API return needed fields
+
+Find backend endpoint used by [frontend page]:
+- [endpoint name or API constant]
+
+Ensure each returned record includes:
+- id
+- [field_1]
+- [field_2]
+- [field_3]
+- [status field]
+- [settings object if needed]
+
+Do not rename existing response fields without updating frontend mapping.
+
+PART H — Compatibility / fallback handling
+
+1. Keep support for existing records with missing/null values.
+2. Do not break old data.
+3. Use fallbacks only for compatibility.
+4. Primary fields should be:
+   - [actual_db_field_1]
+   - [actual_db_field_2]
+5. Do not use wrong/missing fields as primary fields:
+   - [wrong_field_1]
+   - [wrong_field_2]
+
+PART I — Testing checklist
+
+Test [role/teacher/admin] side:
+1. Login as [role].
+2. Open [page/route].
+3. Perform [action].
+4. Save changes.
+5. Refresh page.
+6. Confirm saved values persist.
+7. Confirm related UI updates correctly.
+
+Test [student/user] side:
+1. Login as [role].
+2. Open [page/route].
+3. Confirm allowed case works.
+4. Change data to create blocked case.
+5. Refresh page.
+6. Confirm button/action is hidden or disabled.
+7. Confirm direct URL access is blocked.
+8. Confirm direct API request is blocked.
+9. Change setting to allow again.
+10. Confirm action becomes available.
+
+Backend/database test:
+1. Check table [table_name].
+2. Confirm [field] is saved correctly.
+3. Confirm no SQL errors.
+4. Confirm no missing table/column errors.
+5. Confirm API response includes required fields.
+
+Do not break:
+- [Existing feature 1]
+- [Existing feature 2]
+- [Existing feature 3]
+- [Existing page/flow]
+
+Required final response:
+After implementing, list:
+- changed frontend files
+- changed backend files
+- exact endpoints touched
+- exact DB fields used
+- how the main rule is computed
+- how backend enforcement works
+- whether migration is needed
+- assumptions made
+- manual testing steps
+
+
+

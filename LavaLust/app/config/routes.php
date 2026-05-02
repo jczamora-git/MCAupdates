@@ -483,6 +483,7 @@ $router->put('/api/attendance/session/{session_id}/student/{student_id}', 'Atten
 $router->get('/api/attendance/student/{student_id}', 'AttendanceController::api_get_student_attendance')->where_number('student_id');
 $router->get('/api/attendance/course/{course_id}', 'AttendanceController::api_get_course_attendance')->where_number('course_id');
 $router->get('/api/attendance/today', 'AttendanceController::api_get_today_attendance');
+$router->get('/api/attendance/logs', 'AttendanceController::api_get_attendance_logs');
 
 // API Routes - PDF Report Generation (Admin/Teacher)
 $router->get('/api/reports/students', 'ReportController::api_get_students');

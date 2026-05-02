@@ -18,6 +18,47 @@ interface LocationState {
   sectionName?: string;
 }
 
+const normalizeNamePart = (value: unknown) => (value ? String(value).trim() : '');
+
+const parseFullName = (fullName: string) => {
+  const parts = fullName.split(/\s+/).filter(Boolean);
+  if (parts.length === 0) return { firstName: '', middleName: '', lastName: '' };
+  if (parts.length === 1) return { firstName: parts[0], middleName: '', lastName: '' };
+  if (parts.length === 2) return { firstName: parts[0], middleName: '', lastName: parts[1] };
+  return {
+    firstName: parts[0],
+    middleName: parts.slice(1, -1).join(' '),
+    lastName: parts[parts.length - 1]
+  };
+};
+
+const getStudentNameParts = (student: any) => {
+  const lastName = normalizeNamePart(student.last_name || student.lastname);
+  const firstName = normalizeNamePart(student.first_name || student.firstname);
+  const middleName = normalizeNamePart(student.middle_name || student.middlename);
+
+  if (lastName || firstName) {
+    return { lastName, firstName, middleName };
+  }
+
+  const fullName = normalizeNamePart(student.name || student.full_name || student.fullName);
+  return parseFullName(fullName);
+};
+
+const formatStudentName = (student: any) => {
+  const { lastName, firstName, middleName } = getStudentNameParts(student);
+  const rightSide = [firstName, middleName].filter(Boolean).join(' ');
+  if (lastName || rightSide) {
+    return [lastName, rightSide].filter(Boolean).join(', ');
+  }
+  return normalizeNamePart(student.name || student.full_name || student.fullName || '');
+};
+
+const getStudentLastName = (student: any) => {
+  const { lastName } = getStudentNameParts(student);
+  return lastName;
+};
+
 const AttendanceSession: React.FC = () => {
   const location = useLocation();
   const navigate = useNavigate();
@@ -129,13 +170,31 @@ const AttendanceSession: React.FC = () => {
           studentId: st.student_id ?? null,
           id: st.student_id ?? st.id ?? st.user_id ?? String(st.id),
           name: (st.first_name && st.last_name) ? `${st.first_name} ${st.last_name}` : (st.name ?? `${st.firstName ?? ''} ${st.lastName ?? ''}`),
+          first_name: st.first_name ?? st.firstName ?? '',
+          middle_name: st.middle_name ?? st.middleName ?? '',
+          last_name: st.last_name ?? st.lastName ?? '',
           email: st.email ?? st.user_email ?? '',
           status: st.status ?? st.user_status ?? 'active',
           raw: st
         }));
         
-        const shuffled = normalized.sort(() => Math.random() - 0.5);
-        setStudents(shuffled);
+        const sorted = normalized
+          .map((student, index) => ({ student, index }))
+          .sort((a, b) => {
+            const lastA = getStudentLastName(a.student).toLowerCase();
+            const lastB = getStudentLastName(b.student).toLowerCase();
+            if (lastA !== lastB) return lastA.localeCompare(lastB);
+            const nameA = formatStudentName(a.student).toLowerCase();
+            const nameB = formatStudentName(b.student).toLowerCase();
+            if (nameA !== nameB) return nameA.localeCompare(nameB);
+            return a.index - b.index;
+          })
+          .map(({ student }) => ({
+            ...student,
+            displayName: formatStudentName(student)
+          }));
+
+        setStudents(sorted);
         return true;
       }
       notify.error('No students found for this level');
@@ -462,7 +521,7 @@ const AttendanceSession: React.FC = () => {
                       {presentStudents.map((student) => (
                         <div key={student.id} className="flex items-center gap-3 p-3 bg-green-50 rounded-lg">
                           <Check className="w-4 h-4 text-green-600 flex-shrink-0" />
-                          <span className="text-sm font-medium text-gray-800">{student.name}</span>
+                          <span className="text-sm font-medium text-gray-800">{student.displayName || formatStudentName(student)}</span>
                           <span className="text-xs text-gray-500 ml-auto">{student.studentId || student.userId}</span>
                         </div>
                       ))}
@@ -480,7 +539,7 @@ const AttendanceSession: React.FC = () => {
                       {lateStudents.map((student) => (
                         <div key={student.id} className="flex items-center gap-3 p-3 bg-yellow-50 rounded-lg">
                           <ChevronLeft className="w-4 h-4 text-yellow-600 flex-shrink-0 -rotate-90" />
-                          <span className="text-sm font-medium text-gray-800">{student.name}</span>
+                          <span className="text-sm font-medium text-gray-800">{student.displayName || formatStudentName(student)}</span>
                           <span className="text-xs text-gray-500 ml-auto">{student.studentId || student.userId}</span>
                         </div>
                       ))}
@@ -498,7 +557,7 @@ const AttendanceSession: React.FC = () => {
                       {absentStudents.map((student) => (
                         <div key={student.id} className="flex items-center gap-3 p-3 bg-red-50 rounded-lg">
                           <X className="w-4 h-4 text-red-600 flex-shrink-0" />
-                          <span className="text-sm font-medium text-gray-800">{student.name}</span>
+                          <span className="text-sm font-medium text-gray-800">{student.displayName || formatStudentName(student)}</span>
                           <span className="text-xs text-gray-500 ml-auto">{student.studentId || student.userId}</span>
                         </div>
                       ))}
@@ -516,7 +575,7 @@ const AttendanceSession: React.FC = () => {
                       {excusedStudents.map((student) => (
                         <div key={student.id} className="flex items-center gap-3 p-3 bg-blue-50 rounded-lg">
                           <ChevronLeft className="w-4 h-4 text-blue-600 flex-shrink-0 rotate-90" />
-                          <span className="text-sm font-medium text-gray-800">{student.name}</span>
+                          <span className="text-sm font-medium text-gray-800">{student.displayName || formatStudentName(student)}</span>
                           <span className="text-xs text-gray-500 ml-auto">{student.studentId || student.userId}</span>
                         </div>
                       ))}
@@ -532,7 +591,7 @@ const AttendanceSession: React.FC = () => {
                       {unmarkedStudents.map((student) => (
                         <div key={student.id} className="flex items-center gap-3 p-3 bg-gray-100 rounded-lg">
                           <div className="w-4 h-4 rounded border border-gray-400 flex-shrink-0" />
-                          <span className="text-sm text-gray-700">{student.name}</span>
+                          <span className="text-sm text-gray-700">{student.displayName || formatStudentName(student)}</span>
                           <span className="text-xs text-gray-500 ml-auto">{student.studentId || student.userId}</span>
                         </div>
                       ))}
@@ -731,13 +790,13 @@ const AttendanceSession: React.FC = () => {
                 {/* Student Avatar */}
                 <div className="w-32 h-32 mx-auto bg-gradient-to-br from-blue-400 to-cyan-500 rounded-full flex items-center justify-center">
                   <span className="text-5xl font-bold text-white">
-                    {currentStudent.name?.charAt(0).toUpperCase() || '?'}
+                    {(currentStudent.displayName || formatStudentName(currentStudent))?.charAt(0).toUpperCase() || '?'}
                   </span>
                 </div>
 
                 {/* Student Info */}
                 <div>
-                  <h2 className="text-3xl font-bold text-gray-900 mb-2">{currentStudent.name}</h2>
+                  <h2 className="text-3xl font-bold text-gray-900 mb-2">{currentStudent.displayName || formatStudentName(currentStudent)}</h2>
                   <p className="text-lg text-gray-600">{currentStudent.studentId || currentStudent.userId}</p>
                 </div>
 

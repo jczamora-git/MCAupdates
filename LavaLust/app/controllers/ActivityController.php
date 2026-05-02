@@ -269,6 +269,20 @@ class ActivityController extends Controller
             $result = $this->ActivityModel->update($id, $updateData);
 
             if ($result) {
+                if (isset($updateData['due_at']) && in_array($activity['type'], ['quiz', 'exam'])) {
+                    $existingSettings = $this->db->table('activity_settings')
+                        ->where('activity_id', $id)
+                        ->get();
+                    if ($existingSettings) {
+                        $this->db->table('activity_settings')
+                            ->where('activity_id', $id)
+                            ->update([
+                                'available_until' => $updateData['due_at'],
+                                'updated_at' => app_now()
+                            ]);
+                    }
+                }
+
                 $updated = $this->ActivityModel->get_activity($id);
                 http_response_code(200);
                 echo json_encode([
@@ -1064,6 +1078,7 @@ class ActivityController extends Controller
                         'type' => $activity['type'],
                         'max_score' => $activity['max_score'],
                         'due_at' => $activity['due_at'],
+                        'allow_late_submission' => $activity['allow_late_submission'],
                         'section_id' => $activity['section_id'],
                         'created_at' => $activity['created_at'],
                         // Student's grade info (null if not graded yet)
@@ -3188,6 +3203,15 @@ class ActivityController extends Controller
             $isLate = false;
             if ($activity['due_at']) {
                 $isLate = strtotime('now') > strtotime($activity['due_at']);
+            }
+
+            if ($isLate && empty($activity['allow_late_submission'])) {
+                http_response_code(403);
+                echo json_encode([
+                    'success' => false,
+                    'message' => 'Late submissions are not allowed for this activity'
+                ]);
+                return;
             }
 
             // Check if submission already exists

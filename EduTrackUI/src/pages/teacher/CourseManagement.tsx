@@ -600,7 +600,7 @@ const CourseManagement = () => {
         <div className="border-b border-blue-100 px-8 py-6 shadow-sm">
           <Button variant="ghost" onClick={() => navigate("/teacher/courses")} className="mb-4 text-gray-600">
             <ArrowLeft className="h-4 w-4 mr-2" />
-            Back to Courses
+            Back to Subjects
           </Button>
 
           <div className="space-y-2">

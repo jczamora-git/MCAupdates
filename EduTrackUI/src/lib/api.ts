@@ -263,6 +263,7 @@ export const API_ENDPOINTS = {
   ATTENDANCE_MARK: `${API_BASE_URL}/api/attendance/mark`,
   ATTENDANCE_BULK: `${API_BASE_URL}/api/attendance/bulk`,
   ATTENDANCE_TODAY: `${API_BASE_URL}/api/attendance/today`,
+  ATTENDANCE_LOGS: `${API_BASE_URL}/api/attendance/logs`,
   ATTENDANCE_STUDENT: (id: string | number) => `${API_BASE_URL}/api/attendance/student/${id}`,
   ATTENDANCE_COURSE: (id: string | number) => `${API_BASE_URL}/api/attendance/course/${id}`,
   

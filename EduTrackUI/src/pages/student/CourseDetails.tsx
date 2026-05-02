@@ -16,6 +16,13 @@ const CourseDetails = () => {
   const [courseInfo, setCourseInfo] = useState<any>(null);
   const [loading, setLoading] = useState(true);
 
+  const parseDateTime = (value?: string | null) => {
+    if (!value) return null;
+    const cleaned = String(value).includes('T') ? String(value) : String(value).replace(' ', 'T');
+    const parsed = new Date(cleaned);
+    return isNaN(parsed.getTime()) ? null : parsed;
+  };
+
   useEffect(() => {
     if (!isAuthenticated || user?.role !== "student") {
       navigate("/auth");
@@ -152,18 +159,58 @@ const CourseDetails = () => {
 
         setCourseInfo(info);
 
+        const quizLikeActivities = (finalActivities || []).filter((a: any) => ['quiz', 'exam'].includes(a.type));
+        const settingsMap: Record<number, any> = {};
+        if (quizLikeActivities.length > 0) {
+          const settingsResults = await Promise.all(
+            quizLikeActivities.map(async (a: any) => {
+              try {
+                return await apiGet(`${API_ENDPOINTS.ACTIVITIES}/${a.id}/settings`);
+              } catch (err) {
+                return null;
+              }
+            })
+          );
+          settingsResults.forEach((res, idx) => {
+            const activityId = quizLikeActivities[idx]?.id;
+            if (activityId) {
+              settingsMap[activityId] = res && res.success ? res.data : null;
+            }
+          });
+        }
+
         // 6) Normalize activities for UI - data now comes with grades already embedded
-        const mapped = (finalActivities || []).map((a: any) => ({
-          id: a.id,
-          title: a.title,
-          type: a.type,
-          dueDate: a.due_at ? a.due_at.split(' ')[0] : 'TBA',
-          // Use the embedded student_grade from the optimized endpoint
-          status: a.student_grade !== null ? 'graded' : (a.grade_status?.toLowerCase() || 'pending'),
-          score: a.student_grade ?? null,
-          maxScore: a.max_score ?? 100,
-          grading_stats: a.grading_stats || {}
-        }));
+        const mapped = (finalActivities || []).map((a: any) => {
+          const settings = settingsMap[a.id];
+          const availableFromRaw = settings?.available_from ?? null;
+          const availableUntilRaw = settings?.available_until ?? a.due_at ?? null;
+          const availableFrom = parseDateTime(availableFromRaw);
+          const availableUntil = parseDateTime(availableUntilRaw);
+          const allowLate = Boolean(a.allow_late_submission);
+          const now = Date.now();
+          const isNotYetAvailable = availableFrom ? now < availableFrom.getTime() : false;
+          const isClosed = availableUntil ? now > availableUntil.getTime() && !allowLate : false;
+          const isLateAllowed = availableUntil ? now > availableUntil.getTime() && allowLate : false;
+          const dueLabel = availableUntil ? availableUntil.toLocaleDateString() : (a.due_at ? a.due_at.split(' ')[0] : 'TBA');
+
+          return {
+            id: a.id,
+            title: a.title,
+            type: a.type,
+            dueDate: dueLabel,
+            availableFrom,
+            availableUntil,
+            isNotYetAvailable,
+            isClosed,
+            isLateAllowed,
+            allowLate,
+            // Use the embedded student_grade from the optimized endpoint
+            status: a.student_grade !== null ? 'graded' : (a.grade_status?.toLowerCase() || 'pending'),
+            score: a.student_grade ?? null,
+            maxScore: a.max_score ?? 100,
+            grading_stats: a.grading_stats || {}
+          };
+        });
 
         setActivities(mapped);
       } catch (e) {
@@ -310,10 +357,11 @@ const CourseDetails = () => {
                           <Button
                             size="sm"
                             onClick={() => navigate(`/student/courses/${courseId}/activities/${activity.id}/quiz`)}
-                            className="bg-gradient-to-r from-blue-600 to-blue-500 text-white hover:from-blue-700 hover:to-blue-600"
+                            disabled={activity.isNotYetAvailable || activity.isClosed}
+                            className="bg-gradient-to-r from-blue-600 to-blue-500 text-white hover:from-blue-700 hover:to-blue-600 disabled:opacity-60"
                           >
                             <PlayCircle className="h-3.5 w-3.5 mr-1" />
-                            Take {activity.type === 'exam' ? 'Exam' : 'Quiz'}
+                            {activity.isNotYetAvailable ? 'Not Available Yet' : activity.isClosed ? 'Closed' : `Take ${activity.type === 'exam' ? 'Exam' : 'Quiz'}`}
                           </Button>
                         )}
                         {['worksheet', 'project', 'art'].includes(activity.type) && activity.status !== 'graded' && (
@@ -321,10 +369,11 @@ const CourseDetails = () => {
                             size="sm"
                             variant="outline"
                             onClick={() => navigate(`/student/courses/${courseId}/activities/${activity.id}/submit`)}
-                            className="border-blue-200 text-blue-700 hover:bg-blue-50"
+                            disabled={activity.isClosed}
+                            className="border-blue-200 text-blue-700 hover:bg-blue-50 disabled:opacity-60"
                           >
                             <Upload className="h-3.5 w-3.5 mr-1" />
-                            Submit
+                            {activity.isClosed ? 'Closed' : 'Submit'}
                           </Button>
                         )}
                         {activity.status !== 'graded' && !['quiz', 'exam', 'worksheet', 'project', 'art'].includes(activity.type) && (

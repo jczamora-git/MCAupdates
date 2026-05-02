@@ -150,7 +150,7 @@ const Courses = () => {
         <div className="mb-8 flex items-center justify-between">
           <div>
             <h1 className="text-4xl font-bold mb-2 bg-gradient-to-r from-primary to-accent bg-clip-text text-transparent">
-              My Teaching Courses
+              My Classes
             </h1>
             <p className="text-muted-foreground text-lg">
               {user?.name} • Manage your assigned courses and students
@@ -166,7 +166,7 @@ const Courses = () => {
                 <CardTitle className="text-2xl font-bold">
                   {loading ? (
                     <span className="flex items-center gap-2">
-                      All Courses ({courses.length})
+                      All Subjects ({courses.length})
                       <Loader2 className="h-5 w-5 animate-spin" />
                     </span>
                   ) : (
@@ -301,7 +301,7 @@ const Courses = () => {
                           className="w-full gap-2 font-medium"
                         >
                           <BookOpen className="h-4 w-4" />
-                          Manage Course
+                          Manage Class
                         </Button>
                       </div>
                     )}

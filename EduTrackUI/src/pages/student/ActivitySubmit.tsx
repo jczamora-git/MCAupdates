@@ -40,6 +40,13 @@ const ActivitySubmit = () => {
   const [courseTitle, setCourseTitle] = useState<string>("Course");
   const [courseCode, setCourseCode] = useState<string>("N/A");
 
+  const parseDateTime = (value?: string | null) => {
+    if (!value) return null;
+    const cleaned = String(value).includes('T') ? String(value) : String(value).replace(' ', 'T');
+    const parsed = new Date(cleaned);
+    return isNaN(parsed.getTime()) ? null : parsed;
+  };
+
   useEffect(() => {
     if (!isAuthenticated || user?.role !== "student") {
       navigate("/auth");
@@ -139,6 +146,10 @@ const ActivitySubmit = () => {
   };
 
   const handleSubmit = async () => {
+    if (isClosed) {
+      setAlert({ type: 'error', message: 'This activity is closed. Late submissions are not allowed.' });
+      return;
+    }
     if (!submissionText.trim() && selectedFiles.length === 0) {
       setAlert({ type: 'error', message: 'Please provide a submission text or upload files' });
       return;
@@ -181,6 +192,11 @@ const ActivitySubmit = () => {
       setSubmitting(false);
     }
   };
+
+  const deadline = parseDateTime(activity?.due_at);
+  const isLate = deadline ? new Date() > deadline : false;
+  const allowLate = Boolean(activity?.allow_late_submission);
+  const isClosed = Boolean(deadline && isLate && !allowLate);
 
   if (loading) {
     return (
@@ -322,6 +338,7 @@ const ActivitySubmit = () => {
                               setIsEditing(true);
                             }
                           }}
+                          disabled={isClosed}
                           className="bg-white/10 backdrop-blur-sm border-2 border-white/40 hover:border-white/60 hover:bg-white/20 text-white transition-all duration-200 shadow-lg hover:shadow-xl flex-shrink-0"
                           title={isEditing ? "Cancel editing" : "Edit submission"}
                         >
@@ -331,6 +348,30 @@ const ActivitySubmit = () => {
                     </div>
                   </div>
                 </div>
+
+                {isClosed && (
+                  <div className="bg-red-50 border border-red-200 rounded-lg sm:rounded-xl p-4 sm:p-5">
+                    <div className="flex items-start gap-3">
+                      <AlertCircle className="h-5 w-5 text-red-600 mt-0.5" />
+                      <div className="text-sm text-red-800">
+                        <p className="font-semibold">This activity is closed.</p>
+                        <p>Late submissions are not allowed.</p>
+                      </div>
+                    </div>
+                  </div>
+                )}
+
+                {!isClosed && isLate && (
+                  <div className="bg-amber-50 border border-amber-200 rounded-lg sm:rounded-xl p-4 sm:p-5">
+                    <div className="flex items-start gap-3">
+                      <AlertCircle className="h-5 w-5 text-amber-600 mt-0.5" />
+                      <div className="text-sm text-amber-800">
+                        <p className="font-semibold">This submission is late.</p>
+                        <p>Late submissions are allowed for this activity.</p>
+                      </div>
+                    </div>
+                  </div>
+                )}
 
                   {activity?.description && (
                   <div className="bg-white rounded-lg sm:rounded-xl border border-gray-200 shadow-sm p-4 sm:p-6 w-full overflow-hidden">
@@ -534,7 +575,7 @@ const ActivitySubmit = () => {
                       </Button>
                       <Button
                         onClick={handleSubmit}
-                        disabled={submitting || (!submissionText.trim() && selectedFiles.length === 0)}
+                        disabled={isClosed || submitting || (!submissionText.trim() && selectedFiles.length === 0)}
                         size="sm"
                         className="flex-1 sm:flex-initial bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-700 hover:to-indigo-700 text-white font-semibold shadow-lg hover:shadow-xl transition-all duration-200 px-4 sm:px-6 py-2.5 touch-manipulation"
                       >

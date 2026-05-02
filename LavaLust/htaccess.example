@@ -1,0 +1,46 @@
+AddDefaultCharset UTF-8
+<IfModule mod_rewrite.c>
+    RewriteEngine On
+
+    # --------------------------------------------------
+    # Allow index.php
+    <Files "index.php">
+        Require all granted
+    </Files>
+
+    # --------------------------------------------------
+    # Deny access to sensitive directories
+    RedirectMatch 403 ^/(app|scheme|console|runtime)/
+
+    # --------------------------------------------------
+    # Deny access to sensitive files
+    <FilesMatch "\.(env|json|xml|log|md|lock|git|ini|bak|sql)$">
+        Require all denied
+    </FilesMatch>
+
+    # --------------------------------------------------
+    # Prevent directory browsing
+    Options -Indexes
+
+    # --------------------------------------------------
+    # Default landing page: send root URL to frontend auth route
+    RewriteRule ^$ /auth [R=302,L]
+
+    # --------------------------------------------------
+    # Public share-image alias without /ui prefix
+    RewriteRule ^register-cover\.png$ /ui/register-cover.png [L,NC]
+
+    # --------------------------------------------------
+    # Keep existing files/folders accessible as-is (includes /ui assets and backend files)
+    RewriteCond %{REQUEST_FILENAME} -f [OR]
+    RewriteCond %{REQUEST_FILENAME} -d
+    RewriteRule ^ - [L]
+
+    # --------------------------------------------------
+    # Keep backend API on PHP router
+    RewriteRule ^api(?:/(.*))?$ index.php/api/$1 [QSA,L]
+
+    # --------------------------------------------------
+    # Frontend SPA fallback: serve /ui/index.html without changing URL
+    RewriteRule ^ /ui/index.html [QSA,L]
+</IfModule>

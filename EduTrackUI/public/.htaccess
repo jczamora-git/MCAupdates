@@ -1,0 +1,14 @@
+<IfModule mod_rewrite.c>
+  RewriteEngine On
+  RewriteBase /ui/
+  
+  # If the request is not for a real file
+  RewriteCond %{REQUEST_FILENAME} !-f
+  # If the request is not for a real directory
+  RewriteCond %{REQUEST_FILENAME} !-d
+  # Rewrite all other URLs to index.html
+  RewriteRule ^ index.html [QSA,L]
+</IfModule>
+
+# Handle 404 errors
+ErrorDocument 404 /ui/index.html

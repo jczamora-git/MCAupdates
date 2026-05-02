@@ -1,0 +1,577 @@
+import { useEffect, useState } from "react";
+import { useNavigate, useParams } from "react-router-dom";
+import { useAuth } from "@/hooks/useAuth";
+import { DashboardLayout } from "@/components/DashboardLayout";
+import { Button } from "@/components/ui/button";
+import { Textarea } from "@/components/ui/textarea";
+import { Badge } from "@/components/ui/badge";
+import { AlertMessage } from "@/components/AlertMessage";
+import { 
+  ArrowLeft, 
+  Upload, 
+  FileText, 
+  Clock,
+  CheckCircle,
+  CheckCircle2,
+  AlertCircle,
+  ExternalLink,
+  BookOpen,
+  X
+} from "lucide-react";
+import { API_ENDPOINTS, apiGet, apiPost } from "@/lib/api";
+
+const ActivitySubmit = () => {
+  const { user, isAuthenticated } = useAuth();
+  const navigate = useNavigate();
+  const { courseId, activityId } = useParams();
+
+  const [activity, setActivity] = useState<any>(null);
+  const [loading, setLoading] = useState(true);
+  const [submitting, setSubmitting] = useState(false);
+  const [alert, setAlert] = useState<{ type: 'success' | 'error'; message: string } | null>(null);
+  
+  const [submissionText, setSubmissionText] = useState("");
+  const [selectedFiles, setSelectedFiles] = useState<File[]>([]);
+  const [existingSubmission, setExistingSubmission] = useState<any>(null);
+  const [studentDbId, setStudentDbId] = useState<number | null>(null);
+  
+  // Course info for sidebar
+  const [courseTitle, setCourseTitle] = useState<string>("Course");
+  const [courseCode, setCourseCode] = useState<string>("N/A");
+
+  useEffect(() => {
+    if (!isAuthenticated || user?.role !== "student") {
+      navigate("/auth");
+    }
+  }, [isAuthenticated, user, navigate]);
+
+  useEffect(() => {
+    loadActivityData();
+  }, [activityId, user]);
+
+  const loadActivityData = async () => {
+    if (!user?.id || !activityId) return;
+
+    try {
+      setLoading(true);
+
+      // Fetch activity details
+      const activityRes = await apiGet(`${API_ENDPOINTS.ACTIVITIES}/${activityId}`);
+      if (activityRes.success && activityRes.data) {
+        setActivity(activityRes.data);
+      }
+
+      // Get student info to fetch student_id
+      const studentRes = await apiGet(API_ENDPOINTS.STUDENT_BY_USER(user.id));
+      const student = studentRes.data || studentRes.student || studentRes || null;
+      const dbId = student?.id;
+      setStudentDbId(dbId);
+      
+      const sectionId = student?.section_id || student?.sectionId;
+
+      // Fetch course info for sidebar
+      if (courseId) {
+        try {
+          const taRes = await apiGet(`${API_ENDPOINTS.TEACHER_ASSIGNMENTS_FOR_STUDENT}?section_id=${sectionId}`);
+          const assignments = taRes.data || taRes.assignments || taRes || [];
+          const match = assignments.find(
+            (a: any) => String(a.id) === String(courseId) || String(a.subject?.id) === String(courseId)
+          );
+          if (match) {
+            const subj = match.subject || match.subject_info || {};
+            setCourseTitle(subj.course_name || subj.title || subj.name || "Course");
+            setCourseCode(subj.course_code || subj.code || "N/A");
+          }
+        } catch (err) {
+          console.error('Error fetching course info:', err);
+        }
+        
+        // Fallback: try fetching subject directly
+        try {
+          const subjRes = await apiGet(API_ENDPOINTS.SUBJECT_BY_ID(courseId));
+          const subj = subjRes.data || subjRes.subject || subjRes || null;
+          if (subj) {
+            setCourseTitle(prev => prev === "Course" ? (subj.course_name || subj.title || subj.name || "Course") : prev);
+            setCourseCode(prev => prev === "N/A" ? (subj.course_code || subj.code || "N/A") : prev);
+          }
+        } catch (err) {
+          console.error('Error fetching subject:', err);
+        }
+      }
+
+      // Check if there's already a submission using the new endpoint
+      if (dbId) {
+        try {
+          const submissionRes = await apiGet(
+            `${API_ENDPOINTS.ACTIVITIES}/${activityId}/my-submission`
+          );
+          if (submissionRes.success && submissionRes.data) {
+            setExistingSubmission(submissionRes.data);
+            setSubmissionText(submissionRes.data.submission_text || "");
+          }
+        } catch (err) {
+          // No existing submission
+        }
+      }
+
+    } catch (error) {
+      console.error('Error loading activity:', error);
+      setAlert({ type: 'error', message: 'Failed to load activity details' });
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    if (e.target.files) {
+      const newFiles = Array.from(e.target.files);
+      setSelectedFiles([...selectedFiles, ...newFiles]);
+    }
+  };
+
+  const removeFile = (index: number) => {
+    setSelectedFiles(selectedFiles.filter((_, i) => i !== index));
+  };
+
+  const handleSubmit = async () => {
+    if (!submissionText.trim() && selectedFiles.length === 0) {
+      setAlert({ type: 'error', message: 'Please provide a submission text or upload files' });
+      return;
+    }
+
+    try {
+      setSubmitting(true);
+
+      if (!studentDbId) {
+        setAlert({ type: 'error', message: 'Student information not loaded. Please refresh the page.' });
+        setSubmitting(false);
+        return;
+      }
+
+      const formData = new FormData();
+      formData.append('activity_id', activityId!);
+      formData.append('student_id', String(studentDbId));
+      formData.append('submission_text', submissionText);
+
+      // Append files
+      selectedFiles.forEach((file) => {
+        formData.append('files[]', file);
+      });
+
+      const res = await apiPost(`${API_ENDPOINTS.ACTIVITIES}/${activityId}/submit`, formData);
+
+      if (res.success) {
+        setAlert({ type: 'success', message: 'Submission saved as draft!' });
+        // Reload submission data to get updated status
+        await loadActivityData();
+      } else {
+        setAlert({ type: 'error', message: res.message || 'Submission failed' });
+      }
+
+    } catch (error) {
+      console.error('Submission error:', error);
+      setAlert({ type: 'error', message: 'Error submitting activity' });
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  if (loading) {
+    return (
+      <DashboardLayout>
+        <div className="flex items-center justify-center h-screen">
+          <div className="text-center">
+            <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-blue-600 mx-auto"></div>
+            <p className="mt-4 text-gray-600">Loading activity...</p>
+          </div>
+        </div>
+      </DashboardLayout>
+    );
+  }
+
+  return (
+    <DashboardLayout>
+      <div className="flex flex-col h-screen bg-gray-50 overflow-hidden">
+        
+        {/* Sticky top bar */}
+        <div className="border-b border-gray-200 px-4 sm:px-8 py-3 sm:py-4 bg-white flex-shrink-0 shadow-sm">
+          <div className="max-w-6xl mx-auto flex items-center justify-between gap-3">
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={() => navigate(`/student/courses/${courseId}`)}
+              className="text-gray-500 hover:text-gray-900 -ml-2 flex-shrink-0"
+            >
+              <ArrowLeft className="h-4 w-4 mr-1.5" />uccessful!' });
+        setTimeout(() => {
+          navigate(`/student/courses/${courseId}`);
+        }, 2000sm:hidden">Back</span>
+            </Button>
+
+            {/* Mobile title */}
+            <div className="flex-1 min-w-0 lg:hidden">
+              <h1 className="text-base font-bold text-gray-900 truncate">{activity?.title || "Submit Activity"}</h1>
+            </div>
+          </div>
+        </div>
+
+        {/* Main content (sidebar + form) */}
+        <div className="flex-1 overflow-hidden">
+          <div className="h-full max-w-6xl mx-auto flex gap-0 lg:gap-6 lg:px-6 lg:py-6">
+
+            {/* Desktop sidebar */}
+            <aside className="hidden lg:flex flex-col w-64 xl:w-72 flex-shrink-0 gap-4">
+              
+              {/* Course info card */}
+              <div className="bg-white rounded-2xl border border-gray-100 shadow-sm p-5">
+                <div className="w-12 h-12 rounded-xl bg-gradient-to-br from-blue-500 to-cyan-400 flex items-center justify-center mb-3 shadow-md shadow-blue-100">
+                  <BookOpen className="h-6 w-6 text-white" />
+                </div>
+                <h2 className="text-xl font-bold text-gray-900 leading-tight">{courseTitle}</h2>
+                {courseCode && (
+                  <span className="inline-block mt-1.5 px-2.5 py-0.5 rounded-full bg-gray-100 text-xs font-semibold text-gray-500">
+                    {courseCode}
+                  </span>
+                )}
+              </div>
+
+              {/* Activity info card */}
+              {activity && (
+                <div className="bg-white rounded-2xl border border-gray-100 shadow-sm p-5">
+                  <div className="flex items-center gap-2 mb-3">
+                    <FileText className="h-5 w-5 text-blue-600" />
+                    <h3 className="font-semibold text-gray-900">Activity Info</h3>
+                  </div>
+                  
+                  <div className="space-y-2.5 text-sm">
+                    <div className="flex items-center gap-2">
+                      <Badge className="bg-blue-600 text-white capitalize">
+                        {activity.type}
+                      </Badge>
+                    </div>
+                    
+                    {activity.due_at && (
+                      <div className="flex items-center gap-2 text-gray-600">
+                        <Clock className="h-4 w-4 flex-shrink-0" />
+                        <span className="text-xs">
+                          Due: {new Date(activity.due_at).toLocaleDateString(undefined, { 
+                            month: 'short', day: 'numeric', year: 'numeric' 
+                          })}
+                        </span>
+                      </div>
+                    )}
+                    
+                    {activity.max_score && (
+                      <div className="flex items-center gap-2 text-gray-600">
+                        <CheckCircle className="h-4 w-4 flex-shrink-0" />
+                        <span className="text-xs font-semibold text-blue-700">
+                          {activity.max_score} points
+                        </span>
+                      </div>
+                    )}
+                  </div>
+                </div>
+              )}
+
+            </aside>
+
+            {/* Form content */}
+            <div className="flex-1 overflow-y-auto">
+              <div className="px-4 sm:px-0 py-4 lg:py-0 space-y-6">
+
+                {/* Activity Title & Instructions - Minimal Header */}
+                <div className="space-y-4">
+                  <div>
+                    <h1 className="text-3xl font-bold text-gray-900">{activity?.title}</h1>
+                    <p className="text-sm text-gray-500 mt-1">
+                      Due: {activity?.due_at ? new Date(activity.due_at).toLocaleDateString(undefined, { 
+                        month: 'long', day: 'numeric', year: 'numeric', hour: 'numeric', minute: 'numeric'
+                      }) : 'No deadline'}
+                    </p>
+                  </div>
+
+                  {activity?.description && (
+                    <div className="space-y-2">
+                      <h2 className="text-sm font-semibold text-gray-900">Instructions</h2>
+                      <div 
+                        className="text-sm text-gray-700 leading-relaxed"
+                        dangerouslySetInnerHTML={{ __html: activity.description }}
+                      />
+                    </div>
+                  )}
+                </div>
+
+                {/* Previous Submission - Minimal Display */}
+                {existingSubmission && (
+                  <div className="space-y-4 pb-6 border-b border-gray-200">
+                    <div className="flex items-center gap-2">
+                      <CheckCircle2 className="h-5 w-5 text-blue-600" />
+                      <h2 className="text-sm font-semibold text-gray-900">Previous Submission</h2>
+                      
+                      {/* Status Badge */}
+                      {submissionStatus === 'turned_in' && (
+                        <Badge className="bg-green-600 text-white">Turned In</Badge>
+                      )}
+                      {submissionStatus === 'graded' && (
+                        <Badge className="bg-blue-600 text-white">Graded</Badge>
+                      )}
+                      {submissionStatus === 'returned' && (
+                        <Badge className="bg-amber-600 text-white">Returned for Revision</Badge>
+                      )}
+                      {submissionStatus === 'draft' && (
+                        <Badge className="bg-gray-500 text-white">Draft</Badge>
+                      )}
+                    </div>
+                    
+                    {existingSubmission.submitted_at && (
+                      <p className="text-xs text-gray-500">
+                        Submitted: {new Date(existingSubmission.submitted_at).toLocaleString(undefined, {
+                          month: 'short', day: 'numeric', year: 'numeric', hour: 'numeric', minute: 'numeric'
+                        })}
+                      </p>
+                    )}
+
+                    {existingSubmission.turned_in_at && submissionStatus === 'turned_in' && (
+                      <p className="text-xs text-green-600 font-medium">
+                        Turned in: {new Date(existingSubmission.turned_in_at).toLocaleString(undefined, {
+                          month: 'short', day: 'numeric', year: 'numeric', hour: 'numeric', minute: 'numeric'
+                        })}
+                      </p>
+                    )}
+
+                    {/* Text Response */}
+                    {existingSubmission.submission_text && (
+                      <div className="space-y-2">
+                        <p className="text-xs font-medium text-gray-700">Text Response</p>
+                        <div className="bg-gray-50 rounded-lg p-4 border border-gray-200">
+                          <p className="text-sm text-gray-800 whitespace-pre-wrap">
+                            {existingSubmission.submission_text}
+                    </div>
+                    
+                    {existingSubmission.submitted_at && (
+                      <p className="text-xs text-gray-500">
+                        Submitted: {new Date(existingSubmission.submitted
+                    )}
+
+                    {/* Status Warnings */}
+                    {submissionStatus === 'turned_in' && (
+                      <div className="flex items-start gap-2 p-3 bg-green-50 border-l-4 border-green-400 rounded">
+                        <CheckCircle2 className="h-4 w-4 text-green-600 mt-0.5 flex-shrink-0" />
+                        <p className="text-xs text-green-800">
+                          <span className="font-semibold">Turned In:</span> Your submission has been turned in. You can undo this to make changes before grading.
+                        </p>
+                      </div>
+                    )}
+
+                    {submissionStatus === 'graded' && (
+                      <div className="flex items-start gap-2 p-3 bg-blue-50 border-l-4 border-blue-400 rounded">
+                        <CheckCircle className="h-4 w-4 text-blue-600 mt-0.5 flex-shrink-0" />
+                        <p className="text-xs text-blue-800">
+                          <span className="font-semibold">Graded:</span> This submission has been graded and can no longer be edited.
+                        </p>
+                      </div>
+                    )}
+
+                    {submissionStatus === 'draft' && (
+                      <div className="flex items-start gap-2 p-3 bg-amber-50 border-l-4 border-amber-400 rounded">
+                        <AlertCircle className="h-4 w-4 text-amber-600 mt-0.5 flex-shrink-0" />
+                        <p className="text-xs text-amber-800">
+                          <span className="font-semibold">Draft:</span> Submitting again will update your draft. Remember to turn it in when ready.
+                        </p>
+                      </div>
+                    )}      className="flex items-center gap-3 px-3 py-2 bg-white border border-gray-200 rounded hover:bg-gray-50 transition-colors group"
+                              >
+                                <FileText className="h-4 w-4 text-gray-600" />
+                                <span className="text-sm text-gray-800 flex-1 truncate">
+                    disabled={submissionStatus === 'turned_in' || submissionStatus === 'graded'}
+                    className="w-full resize-none border border-gray-300 rounded focus:border-blue-500 focus:ring-1 focus:ring-blue-500 text-sm disabled:bg-gray-100 disabled:cursor-not-allowed
+                                </span>
+                                <ExternalLink className="h-3.5 w-3.5 text-gray-400" />
+                              </a>
+                            ));
+                          } catch (e) {
+                            return null;
+                          }
+                        })()}
+                      </div>
+                    )}
+
+                    {/* Resubmission Warning - Minimal */}
+                    <div className="flex items-start gap-2 p-3 bg-amber-50 border-l-4 border-amber-400 rounded">
+                      <AlertCircle className="h-4 w-4 text-amber-600 mt-0.5 flex-shrink-0" />
+                      <p className="text-xs text-amber-800">
+                        <span className="font-semibold">Resubmission Warning:</span> Submitting again will replace your previous submission shown above.
+                      </p>
+                    </div>
+                  </div>
+                )}
+
+                {/* Your Submission Section - Minimal */}
+                <div className="space-y-4">
+                  {/* Text Response - No Label, Just Textarea */}
+                  <Textarea
+                    id="submission-text"
+                    value={submissionText}
+                    onChange={(e) => setSubmissionText(e.target.value)}
+                    placeholder="Add your response..."
+                    rows={6}
+                    className="w-full resize-none border border-gray-300 rounded focus:border-blue-500 focus:ring-1 focus:ring-blue-500 text-sm"
+                  />
+
+                  {/* Selected Files List - Above Upload Button */}
+                  {selectedFiles.length > 0 && (
+                    <d  disabled={submissionStatus === 'turned_in' || submissionStatus === 'graded'}
+                      />
+                      <label htmlFor="file-upload">
+                        <Button
+                          type="button"
+                          variant="outline"
+                          size="sm"
+                          className="cursor-pointer"
+                          disabled={submissionStatus === 'turned_in' || submissionStatus === 'graded'}
+                          asChild
+                        >
+                          <span className="flex items-center gap-2">
+                            <Upload className="h-4 w-4" />
+                            Attach
+                          </span>
+                        </Button>
+                      </label>
+                    </div>
+
+                    <div className="flex items-center gap-2">
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        onClick={() => navigate(`/student/courses/${courseId}`)}
+                        disabled={submitting}
+                      >
+                        Cancel
+                      </Button>
+                      
+                      {/* Show different buttons based on status */}
+                      {submissionStatus === 'draft' && (
+                        <>
+                          <Button
+                            onClick={handleSubmit}
+                            disabled={submitting || (!submissionText.trim() && selectedFiles.length === 0)}
+                            size="sm"
+                            variant="outline"
+                            className="border-blue-600 text-blue-600 hover:bg-blue-50"
+                          >
+                            {submitting ? 'Saving...' : 'Save Draft'}
+                          </Button>
+                          <Button
+                            onClick={handleTurnIn}
+                            disabled={submitting || !existingSubmission}
+                            size="sm"
+                            className="bg-green-600 hover:bg-green-700 text-white"
+                          >
+                            {submitting ? (
+                              <>
+                                <div className="animate-spin rounded-full h-3.5 w-3.5 border-2 border-white border-t-transparent mr-2"></div>
+                                Turning In...
+                              </>
+                            ) : (
+                              <>
+                                <CheckCircle2 className="h-4 w-4 mr-1.5" />
+                                Turn In
+                              </>
+                            )}
+                          </Button>
+                        </>
+                      )}
+
+                      {submissionStatus === 'turned_in' && (
+                        <Button
+                          onClick={handleUndoTurnIn}
+                          disabled={submitting}
+                          size="sm"
+                          variant="outline"
+                          className="border-amber-600 text-amber-600 hover:bg-amber-50"
+                        >
+                          {submitting ? 'Undoing...' : 'Undo Turn In'}
+                        </Button>
+                      )}
+
+                      {submissionStatus === 'returned' && (
+                        <>
+                          <Button
+                            onClick={handleSubmit}
+                            disabled={submitting || (!submissionText.trim() && selectedFiles.length === 0)}
+                            size="sm"
+                            variant="outline"
+                            className="border-blue-600 text-blue-600 hover:bg-blue-50"
+                          >
+                            {submitting ? 'Saving...' : 'Update Draft'}
+                          </Button>
+                          <Button
+                            onClick={handleTurnIn}
+                            disabled={submitting}
+                            size="sm"
+                            className="bg-green-600 hover:bg-green-700 text-white"
+                          >
+                            {submitting ? 'Turning In...' : 'Turn In'}
+                          </Button>
+                        </>
+                      )}
+
+                      {submissionStatus === 'graded' && (
+                        <Badge className="bg-blue-600 text-white px-4 py-2">
+                          <CheckCircle className="h-4 w-4 mr-1.5" />
+                          Graded
+                        </Badge>
+                      )}
+                          <span className="flex items-center gap-2">
+                            <Upload className="h-4 w-4" />
+                            Attach
+                          </span>
+                        </Button>
+                      </label>
+                    </div>
+
+                    <div className="flex items-center gap-2">
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        onClick={() => navigate(`/student/courses/${courseId}`)}
+                        disabled={submitting}
+                      >
+                        Cancel
+                      </Button>
+                      <Button
+                        onClick={handleSubmit}
+                        disabled={submitting || (!submissionText.trim() && selectedFiles.length === 0)}
+                        size="sm"
+                        className="bg-blue-600 hover:bg-blue-700 text-white"
+                      >
+                        {submitting ? (
+                          <>
+                            <div className="animate-spin rounded-full h-3.5 w-3.5 border-2 border-white border-t-transparent mr-2"></div>
+                            Submitting...
+                          </>
+                        ) : (
+                          "Submit"
+                        )}
+                      </Button>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+          </div>
+        </div>
+
+      </div>
+        
+      {alert && (
+        <div className="fixed bottom-6 right-6 z-50">
+          <AlertMessage type={alert.type} message={alert.message} onClose={() => setAlert(null)} />
+        </div>
+      )}
+    </DashboardLayout>
+  );
+};
+
+export default ActivitySubmit;

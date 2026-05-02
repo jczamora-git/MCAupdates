@@ -16,6 +16,30 @@ import { Bell, Plus, Activity, FileText, TrendingUp } from "lucide-react";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
 import { formatDistanceToNow } from "date-fns";
 
+type TeacherClassOption = {
+  subjectId: string | number;
+  sectionId: string | number;
+  courseCode: string;
+  subjectName: string;
+  sectionName: string;
+  label: string;
+};
+
+const parseMetadata = (value: any): any | null => {
+  if (!value) return null;
+  if (typeof value === "object") return value;
+  if (typeof value === "string") {
+    try {
+      return JSON.parse(value);
+    } catch {
+      return null;
+    }
+  }
+  return null;
+};
+
+const toClassKey = (subjectId: string | number, sectionId: string | number) => `${String(subjectId)}:${String(sectionId)}`;
+
 const Announcements = () => {
   const { user } = useAuth();
   const isAdmin = user?.role === "admin";
@@ -61,6 +85,10 @@ const Announcements = () => {
   const [editStartsAt, setEditStartsAt] = useState<string>("");
   const [editEndsAt, setEditEndsAt] = useState<string>("");
   const [editSaving, setEditSaving] = useState(false);
+  const [teacherClasses, setTeacherClasses] = useState<TeacherClassOption[]>([]);
+  const [teacherClassesLoading, setTeacherClassesLoading] = useState(false);
+  const [selectedClassKey, setSelectedClassKey] = useState("");
+  const [editSelectedClassKey, setEditSelectedClassKey] = useState("");
 
   const adminAudienceOptions = [
     { value: "all", label: "All Users" },
@@ -71,13 +99,11 @@ const Announcements = () => {
   ];
 
   const teacherAudienceOptions = [
-    { value: "my_students", label: "My Students" },
-    { value: "my_classes", label: "My Classes" },
-    { value: "parents_of_my_students", label: "Parents of My Students" }
+    { value: "students", label: "My Class" }
   ];
 
   const audienceOptions = isTeacher ? teacherAudienceOptions : adminAudienceOptions;
-  const defaultAudience = isTeacher ? "my_students" : "all";
+  const defaultAudience = isTeacher ? "students" : "all";
 
   const toValidDate = (value: unknown): Date | null => {
     if (!value) return null;
@@ -95,6 +121,9 @@ const Announcements = () => {
     return parsed ? formatDistanceToNow(parsed, { addSuffix: true }) : 'Unknown time';
   };
 
+  const selectedClass = teacherClasses.find((c) => toClassKey(c.subjectId, c.sectionId) === selectedClassKey) || null;
+  const editSelectedClass = teacherClasses.find((c) => toClassKey(c.subjectId, c.sectionId) === editSelectedClassKey) || null;
+
   useEffect(() => {
     if (!isAdmin) {
       setActiveTab("announcements");
@@ -106,6 +135,47 @@ const Announcements = () => {
       setEditAudience(defaultAudience);
     }
   }, [isAdmin, audienceOptions, audience, editAudience, defaultAudience]);
+
+  useEffect(() => {
+    if (!isTeacher) return;
+    if (!isCreateOpen && !isEditOpen) return;
+
+    let mounted = true;
+    const loadTeacherClasses = async () => {
+      setTeacherClassesLoading(true);
+      try {
+        const res = await apiGet(API_ENDPOINTS.TEACHER_MY_SUBJECTS);
+        const subjects = Array.isArray(res?.subjects) ? res.subjects : [];
+        const mapped: TeacherClassOption[] = subjects
+          .map((subject: any) => {
+            const subjectId = subject.subject_id ?? subject.id;
+            const sectionId = subject.section_id ?? subject.sectionId;
+            const courseCode = String(subject.course_code ?? subject.code ?? "");
+            const subjectName = String(subject.name ?? subject.subject_name ?? "");
+            const sectionName = String(subject.section_name ?? subject.section ?? subject.level ?? subject.subject_level ?? "");
+            const label = `${courseCode || subjectName || "Subject"} \u2014 ${sectionName || "Section"}`;
+
+            if (!subjectId || !sectionId) return null;
+            return { subjectId, sectionId, courseCode, subjectName, sectionName, label };
+          })
+          .filter(Boolean) as TeacherClassOption[];
+
+        if (mounted) {
+          setTeacherClasses(mapped);
+        }
+      } catch (e) {
+        if (mounted) setTeacherClasses([]);
+      } finally {
+        if (mounted) setTeacherClassesLoading(false);
+      }
+    };
+
+    loadTeacherClasses();
+
+    return () => {
+      mounted = false;
+    };
+  }, [isTeacher, isCreateOpen, isEditOpen]);
 
   // Notifications hooks
   const { data: notificationsData, isLoading: notificationsLoading } = useNotifications({
@@ -190,7 +260,7 @@ const Announcements = () => {
                   </div>
                   <div>
                     <Label htmlFor="audience">Target Audience</Label>
-                    <Select value={audience} onValueChange={(v) => setAudience(String(v))}>
+                    <Select value={audience} onValueChange={(v) => setAudience(String(v))} disabled={isTeacher}>
                       <SelectTrigger>
                         <SelectValue placeholder="Select audience" />
                       </SelectTrigger>
@@ -203,6 +273,33 @@ const Announcements = () => {
                       </SelectContent>
                     </Select>
                   </div>
+                  {isTeacher && (
+                    <div>
+                      <Label htmlFor="class-target">Class / Subject</Label>
+                      <Select value={selectedClassKey} onValueChange={(v) => setSelectedClassKey(String(v))}>
+                        <SelectTrigger>
+                          <SelectValue placeholder={teacherClassesLoading ? "Loading classes..." : "Select class"} />
+                        </SelectTrigger>
+                        <SelectContent>
+                          {teacherClassesLoading && (
+                            <SelectItem value="__loading" disabled>
+                              Loading classes...
+                            </SelectItem>
+                          )}
+                          {!teacherClassesLoading && teacherClasses.length === 0 && (
+                            <SelectItem value="__empty" disabled>
+                              No assigned classes found.
+                            </SelectItem>
+                          )}
+                          {!teacherClassesLoading && teacherClasses.map((option) => (
+                            <SelectItem key={toClassKey(option.subjectId, option.sectionId)} value={toClassKey(option.subjectId, option.sectionId)}>
+                              {option.label}
+                            </SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                    </div>
+                  )}
                   <div>
                     <Label htmlFor="status">Status</Label>
                     <Select value={status} onValueChange={(v) => setStatus(String(v))}>
@@ -217,8 +314,9 @@ const Announcements = () => {
                     </Select>
                   </div>
                   <div>
-                    <Button className="w-full" disabled={saving || !title || !message} onClick={async () => {
+                    <Button className="w-full" disabled={saving || !title || !message || (isTeacher && !selectedClass)} onClick={async () => {
                       if (!title || !message) return notify.error('Title and message are required');
+                      if (isTeacher && !selectedClass) return notify.error('Please select a class');
                       setSaving(true);
                       try {
                         let published = new Date().toISOString().slice(0,19).replace('T',' ');
@@ -235,10 +333,19 @@ const Announcements = () => {
                         const payload: any = {
                           title,
                           message,
-                          audience,
+                          audience: isTeacher ? "students" : audience,
                           status,
                           published_at: published,
                         };
+
+                        if (isTeacher && selectedClass) {
+                          payload.metadata = {
+                            scope: "class",
+                            subject_id: selectedClass.subjectId,
+                            section_id: selectedClass.sectionId,
+                            target_label: selectedClass.label,
+                          };
+                        }
 
                         const s = toSqlDatetime(startsAt);
                         const e = toSqlDatetime(endsAt);
@@ -249,12 +356,12 @@ const Announcements = () => {
                         const created = res.data ?? res.announcement ?? null;
                         if (created) {
                           setAnnouncements((prev) => [created, ...prev]);
-                          setTitle(''); setMessage(''); setAudience(defaultAudience); setStatus('active'); setStartsAt(''); setEndsAt(''); setIsCreateOpen(false);
+                          setTitle(''); setMessage(''); setAudience(defaultAudience); setStatus('active'); setStartsAt(''); setEndsAt(''); setSelectedClassKey(''); setIsCreateOpen(false);
                           notify.success('Announcement published');
                         } else {
                           if (res && Array.isArray(res) === false && res.id) {
                             setAnnouncements((prev) => [res, ...prev]);
-                            setTitle(''); setMessage(''); setAudience(defaultAudience); setStatus('active'); setStartsAt(''); setEndsAt(''); setIsCreateOpen(false);
+                            setTitle(''); setMessage(''); setAudience(defaultAudience); setStatus('active'); setStartsAt(''); setEndsAt(''); setSelectedClassKey(''); setIsCreateOpen(false);
                             notify.success('Announcement published');
                           } else {
                             notify.error(res?.message || 'Failed to create announcement');
@@ -328,6 +435,13 @@ const Announcements = () => {
                           </td>
                           <td className="px-6 py-4 whitespace-nowrap">
                             <Badge variant="secondary">{announcement.audience}</Badge>
+                            {(() => {
+                              const meta = parseMetadata(announcement.metadata);
+                              const label = meta?.target_label;
+                              return label ? (
+                                <div className="text-xs text-muted-foreground mt-1">Target: {label}</div>
+                              ) : null;
+                            })()}
                           </td>
                           <td className="px-6 py-4">
                             <p className="text-xs text-muted-foreground">
@@ -347,6 +461,7 @@ const Announcements = () => {
                           <td className="px-6 py-4 whitespace-nowrap">
                             <div className="flex items-center gap-2">
                               <Button variant="outline" size="sm" onClick={() => {
+                                const metadata = parseMetadata(announcement.metadata);
                                 setEditingId(Number(announcement.id));
                                 setEditTitle(announcement.title ?? '');
                                 setEditMessage(announcement.message ?? '');
@@ -355,6 +470,11 @@ const Announcements = () => {
                                 setEditStatus(announcement.status ?? 'active');
                                 setEditStartsAt(announcement.starts_at ? (announcement.starts_at.replace(' ', 'T').slice(0,19)) : '');
                                 setEditEndsAt(announcement.ends_at ? (announcement.ends_at.replace(' ', 'T').slice(0,19)) : '');
+                                if (isTeacher && metadata?.scope === 'class' && metadata?.subject_id && metadata?.section_id) {
+                                  setEditSelectedClassKey(toClassKey(metadata.subject_id, metadata.section_id));
+                                } else if (isTeacher) {
+                                  setEditSelectedClassKey('');
+                                }
                                 setIsEditOpen(true);
                               }}>
                                 Edit
@@ -629,7 +749,7 @@ const Announcements = () => {
               </div>
               <div>
                 <Label htmlFor="edit-audience">Target Audience</Label>
-                <Select value={editAudience} onValueChange={(v) => setEditAudience(String(v))}>
+                <Select value={editAudience} onValueChange={(v) => setEditAudience(String(v))} disabled={isTeacher}>
                   <SelectTrigger>
                     <SelectValue />
                   </SelectTrigger>
@@ -642,6 +762,33 @@ const Announcements = () => {
                   </SelectContent>
                 </Select>
               </div>
+              {isTeacher && (
+                <div>
+                  <Label htmlFor="edit-class-target">Class / Subject</Label>
+                  <Select value={editSelectedClassKey} onValueChange={(v) => setEditSelectedClassKey(String(v))}>
+                    <SelectTrigger>
+                      <SelectValue placeholder={teacherClassesLoading ? "Loading classes..." : "Select class"} />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {teacherClassesLoading && (
+                        <SelectItem value="__loading" disabled>
+                          Loading classes...
+                        </SelectItem>
+                      )}
+                      {!teacherClassesLoading && teacherClasses.length === 0 && (
+                        <SelectItem value="__empty" disabled>
+                          No assigned classes found.
+                        </SelectItem>
+                      )}
+                      {!teacherClassesLoading && teacherClasses.map((option) => (
+                        <SelectItem key={toClassKey(option.subjectId, option.sectionId)} value={toClassKey(option.subjectId, option.sectionId)}>
+                          {option.label}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+              )}
               <div>
                 <Label htmlFor="edit-status">Status</Label>
                 <Select value={editStatus} onValueChange={(v) => setEditStatus(String(v))}>
@@ -658,8 +805,9 @@ const Announcements = () => {
               <div>
                 <div className="flex gap-2">
                   <Button className="flex-1" variant="outline" onClick={() => setIsEditOpen(false)}>Cancel</Button>
-                  <Button className="flex-1" disabled={editSaving || !editTitle || !editMessage} onClick={async () => {
+                  <Button className="flex-1" disabled={editSaving || !editTitle || !editMessage || (isTeacher && !editSelectedClass)} onClick={async () => {
                     if (!editingId) return;
+                    if (isTeacher && !editSelectedClass) return notify.error('Please select a class');
                     setEditSaving(true);
                     try {
                       const toSqlDatetime = (val: string) => {
@@ -674,9 +822,18 @@ const Announcements = () => {
                       const payload: any = {
                         title: editTitle,
                         message: editMessage,
-                        audience: editAudience,
+                        audience: isTeacher ? "students" : editAudience,
                         status: editStatus,
                       };
+
+                      if (isTeacher && editSelectedClass) {
+                        payload.metadata = {
+                          scope: "class",
+                          subject_id: editSelectedClass.subjectId,
+                          section_id: editSelectedClass.sectionId,
+                          target_label: editSelectedClass.label,
+                        };
+                      }
                       const s = toSqlDatetime(editStartsAt);
                       const e = toSqlDatetime(editEndsAt);
                       if (s) payload.starts_at = s;

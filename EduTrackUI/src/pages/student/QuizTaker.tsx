@@ -112,6 +112,10 @@ const QuizTaker = () => {
     return isNaN(parsed.getTime()) ? null : parsed;
   };
 
+  const toBool = (value: any) => {
+    return value === true || value === 1 || value === "1" || value === "true";
+  };
+
   // ── Build matchingData from a session's matching_order + questions list ──
   const buildMatchingData = (
     qList: Question[],
@@ -295,7 +299,7 @@ const QuizTaker = () => {
         return;
       }
       if (availability.isClosed) {
-        setAlert({ type: 'error', message: 'This quiz is already closed.' });
+        setAlert({ type: 'error', message: 'This quiz is already closed. Late submissions are not allowed.' });
         return;
       }
 
@@ -353,7 +357,7 @@ const QuizTaker = () => {
 
     if (availability.isClosed) {
       if (!availabilityErrorShown.current) {
-        setAlert({ type: 'error', message: 'This quiz is already closed.' });
+        setAlert({ type: 'error', message: 'This quiz is already closed. Late submissions are not allowed.' });
         availabilityErrorShown.current = true;
       }
       return;
@@ -423,7 +427,7 @@ const QuizTaker = () => {
   const handleSubmitQuiz = async () => {
     try {
       if (availability.isClosed) {
-        setAlert({ type: 'error', message: 'This quiz is already closed.' });
+        setAlert({ type: 'error', message: 'This quiz is already closed. Late submissions are not allowed.' });
         return;
       }
 
@@ -448,9 +452,13 @@ const QuizTaker = () => {
         setAlert({ type: 'error', message: res.message || 'Failed to submit quiz' });
       }
 
-    } catch (error) {
+    } catch (error: any) {
       console.error('Submit error:', error);
-      setAlert({ type: 'error', message: 'Error submitting quiz' });
+      const message =
+        error?.message ||
+        error?.response?.message ||
+        'Error submitting quiz';
+      setAlert({ type: 'error', message });
     } finally {
       setSubmitting(false);
     }
@@ -927,7 +935,11 @@ const QuizTaker = () => {
   const availability = (() => {
     const availableFrom = parseDateTime(settings.available_from);
     const availableUntil = parseDateTime(settings.available_until || activity?.due_at || null);
-    const allowLate = Boolean(activity?.allow_late_submission);
+    const allowLate = toBool(
+      activity?.allow_late_submission ??
+      activity?.allow_late_submissions ??
+      activity?.allowLateSubmission
+    );
     const now = Date.now();
     const isNotYetAvailable = availableFrom ? now < availableFrom.getTime() : false;
     const isClosed = availableUntil ? now > availableUntil.getTime() && !allowLate : false;

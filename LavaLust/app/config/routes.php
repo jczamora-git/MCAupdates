@@ -288,9 +288,17 @@ $router->get('/api/rfid/sessions', 'RFIDController::api_sessions');
 $router->post('/api/rfid/sessions', 'RFIDController::api_create_session');
 $router->post('/api/rfid/sessions/{id}/start', 'RFIDController::api_start_session')->where_number('id');
 $router->post('/api/rfid/sessions/{id}/end', 'RFIDController::api_end_session')->where_number('id');
+$router->get('/api/rfid/session-templates', 'RFIDController::api_session_templates');
+$router->post('/api/rfid/session-templates', 'RFIDController::api_create_session_template');
+$router->put('/api/rfid/session-templates/{id}', 'RFIDController::api_update_session_template')->where_number('id');
+$router->put('/api/rfid/session-templates/{id}/status', 'RFIDController::api_update_session_template_status')->where_number('id');
+$router->delete('/api/rfid/session-templates/{id}', 'RFIDController::api_delete_session_template')->where_number('id');
+$router->post('/api/rfid/session-templates/{id}/start', 'RFIDController::api_start_session_template')->where_number('id');
 $router->get('/api/rfid/scans', 'RFIDController::api_scans');
 $router->post('/api/rfid/scans', 'RFIDController::api_create_scan');
+$router->get('/api/rfid/stats', 'RFIDController::api_stats');
 $router->post('/api/rfid/verify-passkey', 'RFIDController::api_verify_passkey');
+$router->post('/api/rfid/verify-admin-password', 'RFIDController::api_verify_admin_password');
 
 // API Routes - Tuition Packages
 $router->get('/api/tuition-packages', 'TuitionPackagesController::api_get_packages');

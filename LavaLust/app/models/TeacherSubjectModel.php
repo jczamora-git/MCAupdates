@@ -184,7 +184,7 @@ class TeacherSubjectModel extends Model
 
         foreach ($assignments as $a) {
             $subject = $this->db->table('subjects')
-                              ->select('id, course_code, course_name, credits, category, year_level, semester')
+                              ->select('id, course_code, name, name as course_name, name as subject_name, level, level as year_level, status')
                               ->where('id', $a['subject_id'])
                               ->get();
 
@@ -211,7 +211,7 @@ class TeacherSubjectModel extends Model
     public function get_all_assignments($subject_codes = null)
     {
         $query = $this->db->table('teacher_subject_assignments ts')
-                   ->select('ts.id as teacher_subject_id, ts.subject_id, ts.teacher_id, s.id as subject_id, s.course_code, s.course_name, s.credits, s.year_level, t.id as teacher_id, t.user_id as teacher_user_id, u.id as user_id, u.first_name, u.last_name')
+                   ->select('ts.id as teacher_subject_id, ts.subject_id, ts.teacher_id, s.id as subject_id, s.course_code, s.name as subject_name, s.level as year_level, s.status, t.id as teacher_id, t.user_id as teacher_user_id, u.id as user_id, u.first_name, u.last_name')
                        ->join('subjects s', 'ts.subject_id = s.id')
                        ->join('teachers t', 'ts.teacher_id = t.id')
                        ->join('users u', 't.user_id = u.id');
@@ -226,7 +226,7 @@ class TeacherSubjectModel extends Model
             // Use a raw query for multiple codes to ensure proper parameter binding
             $placeholders = implode(',', array_fill(0, count($normalized), '?'));
             // Compare against normalized course_code (remove spaces and uppercase) in SQL
-                $sql = "SELECT ts.id as teacher_subject_id, ts.subject_id, ts.teacher_id, s.id as subject_id, s.course_code, s.course_name, s.credits, s.year_level, t.id as teacher_id, t.user_id as teacher_user_id, u.id as user_id, u.first_name, u.last_name
+                $sql = "SELECT ts.id as teacher_subject_id, ts.subject_id, ts.teacher_id, s.id as subject_id, s.course_code, s.name as subject_name, s.level as year_level, s.status, t.id as teacher_id, t.user_id as teacher_user_id, u.id as user_id, u.first_name, u.last_name
                     FROM teacher_subject_assignments ts
                     JOIN subjects s ON ts.subject_id = s.id
                     JOIN teachers t ON ts.teacher_id = t.id
@@ -246,12 +246,20 @@ class TeacherSubjectModel extends Model
         if (empty($assignments)) return [];
 
         foreach ($assignments as $a) {
+            $subjectName = $a['subject_name'] ?? $a['course_name'] ?? null;
+            $yearLevel = $a['year_level'] ?? $a['level'] ?? null;
             $subject = [
                 'id' => $a['subject_id'],
+                'subject_id' => $a['subject_id'],
                 'course_code' => $a['course_code'],
-                'course_name' => $a['course_name'],
-                'credits' => $a['credits'] ?? null,
-                'year_level' => $a['year_level'] ?? null,
+                'code' => $a['course_code'],
+                'name' => $subjectName,
+                'subject_name' => $subjectName,
+                'course_name' => $subjectName,
+                'level' => $yearLevel,
+                'year_level' => $yearLevel,
+                'credits' => null,
+                'status' => $a['status'] ?? null
             ];
 
             $sections = $this->db->table('teacher_subject_sections')

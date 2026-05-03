@@ -6,6 +6,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { ArrowLeft, BookOpen, Clock, CheckCircle, BarChart3, AlertCircle, FileText, Upload, PlayCircle } from "lucide-react";
+import { AlertMessage } from "@/components/AlertMessage";
 
 const CourseDetails = () => {
   const { user, isAuthenticated } = useAuth();
@@ -15,12 +16,51 @@ const CourseDetails = () => {
   const [activities, setActivities] = useState<any[]>([]);
   const [courseInfo, setCourseInfo] = useState<any>(null);
   const [loading, setLoading] = useState(true);
+  const [alert, setAlert] = useState<{ type: 'success' | 'error'; message: string } | null>(null);
 
-  const parseDateTime = (value?: string | null) => {
+  const parseDateTime = (value: any): Date | null => {
     if (!value) return null;
-    const cleaned = String(value).includes('T') ? String(value) : String(value).replace(' ', 'T');
-    const parsed = new Date(cleaned);
-    return isNaN(parsed.getTime()) ? null : parsed;
+    const normalized = String(value).replace(' ', 'T');
+    const parsed = new Date(normalized);
+    return Number.isNaN(parsed.getTime()) ? null : parsed;
+  };
+
+  const toBool = (value: any) => {
+    return value === true || value === 1 || value === "1" || value === "true";
+  };
+
+  const getEffectiveDeadline = (activity: any): Date | null => {
+    const rawDeadline =
+      activity?.settings?.available_until ||
+      activity?.quiz_settings?.available_until ||
+      activity?.available_until ||
+      activity?.due_at ||
+      activity?.due_date ||
+      null;
+
+    return parseDateTime(rawDeadline);
+  };
+
+  const allowsLateSubmission = (activity: any): boolean => {
+    return toBool(
+      activity?.allow_late_submission ??
+      activity?.allow_late_submissions ??
+      activity?.allowLateSubmission
+    );
+  };
+
+  const isQuizClosed = (activity: any): boolean => {
+    const deadline = getEffectiveDeadline(activity);
+    if (!deadline) return false;
+
+    const isOverdue = Date.now() > deadline.getTime();
+    const allowLate = allowsLateSubmission(activity);
+
+    return isOverdue && !allowLate;
+  };
+
+  const canTakeQuiz = (activity: any): boolean => {
+    return !isQuizClosed(activity);
   };
 
   useEffect(() => {
@@ -181,17 +221,18 @@ const CourseDetails = () => {
 
         // 6) Normalize activities for UI - data now comes with grades already embedded
         const mapped = (finalActivities || []).map((a: any) => {
-          const settings = settingsMap[a.id];
-          const availableFromRaw = settings?.available_from ?? null;
-          const availableUntilRaw = settings?.available_until ?? a.due_at ?? null;
-          const availableFrom = parseDateTime(availableFromRaw);
-          const availableUntil = parseDateTime(availableUntilRaw);
-          const allowLate = Boolean(a.allow_late_submission);
+          const settings = settingsMap[a.id] ?? a.settings ?? a.quiz_settings ?? null;
+          const availableFrom = parseDateTime(settings?.available_from ?? a?.available_from ?? null);
+          const allowLate = allowsLateSubmission({ ...a, settings });
+          const effectiveDeadline = getEffectiveDeadline({ ...a, settings });
           const now = Date.now();
           const isNotYetAvailable = availableFrom ? now < availableFrom.getTime() : false;
-          const isClosed = availableUntil ? now > availableUntil.getTime() && !allowLate : false;
-          const isLateAllowed = availableUntil ? now > availableUntil.getTime() && allowLate : false;
-          const dueLabel = availableUntil ? availableUntil.toLocaleDateString() : (a.due_at ? a.due_at.split(' ')[0] : 'TBA');
+          const isOverdue = effectiveDeadline ? now > effectiveDeadline.getTime() : false;
+          const isClosed = isOverdue && !allowLate;
+          const isLateAllowed = isOverdue && allowLate;
+          const dueLabel = effectiveDeadline
+            ? effectiveDeadline.toLocaleDateString()
+            : (a.due_at ? a.due_at.split(' ')[0] : 'TBA');
 
           return {
             id: a.id,
@@ -199,11 +240,12 @@ const CourseDetails = () => {
             type: a.type,
             dueDate: dueLabel,
             availableFrom,
-            availableUntil,
+            availableUntil: effectiveDeadline,
             isNotYetAvailable,
             isClosed,
             isLateAllowed,
             allowLate,
+            settings,
             // Use the embedded student_grade from the optimized endpoint
             status: a.student_grade !== null ? 'graded' : (a.grade_status?.toLowerCase() || 'pending'),
             score: a.student_grade ?? null,
@@ -237,6 +279,18 @@ const CourseDetails = () => {
   }, [activities]);
 
   if (!isAuthenticated) return null;
+
+  const handleQuizOpen = (activity: any) => {
+    if (isQuizClosed(activity)) {
+      setAlert({ type: 'error', message: 'This quiz is already closed. Late submissions are not allowed.' });
+      return;
+    }
+    if (activity.isNotYetAvailable) {
+      setAlert({ type: 'error', message: 'This quiz is not yet available.' });
+      return;
+    }
+    navigate(`/student/courses/${courseId}/activities/${activity.id}/quiz`);
+  };
 
   return (
     <DashboardLayout>
@@ -354,15 +408,26 @@ const CourseDetails = () => {
                       <div className="flex items-center gap-3 flex-shrink-0">
                         {/* Action Buttons */}
                         {(activity.type === 'quiz' || activity.type === 'exam') && activity.status !== 'graded' && (
-                          <Button
-                            size="sm"
-                            onClick={() => navigate(`/student/courses/${courseId}/activities/${activity.id}/quiz`)}
-                            disabled={activity.isNotYetAvailable || activity.isClosed}
-                            className="bg-gradient-to-r from-blue-600 to-blue-500 text-white hover:from-blue-700 hover:to-blue-600 disabled:opacity-60"
-                          >
-                            <PlayCircle className="h-3.5 w-3.5 mr-1" />
-                            {activity.isNotYetAvailable ? 'Not Available Yet' : activity.isClosed ? 'Closed' : `Take ${activity.type === 'exam' ? 'Exam' : 'Quiz'}`}
-                          </Button>
+                          <div className="flex flex-col items-end gap-1">
+                            <Button
+                              size="sm"
+                              onClick={() => handleQuizOpen(activity)}
+                              disabled={activity.isNotYetAvailable || !canTakeQuiz(activity)}
+                              className="bg-gradient-to-r from-blue-600 to-blue-500 text-white hover:from-blue-700 hover:to-blue-600 disabled:opacity-60"
+                            >
+                              <PlayCircle className="h-3.5 w-3.5 mr-1" />
+                              {activity.isClosed
+                                ? `${activity.type === 'exam' ? 'Exam' : 'Quiz'} Closed`
+                                : activity.isNotYetAvailable
+                                ? 'Not Available Yet'
+                                : activity.isLateAllowed
+                                ? `Take Late ${activity.type === 'exam' ? 'Exam' : 'Quiz'}`
+                                : `Take ${activity.type === 'exam' ? 'Exam' : 'Quiz'}`}
+                            </Button>
+                            {activity.isClosed && (
+                              <span className="text-xs text-red-600">Late submissions are not allowed.</span>
+                            )}
+                          </div>
                         )}
                         {['worksheet', 'project', 'art'].includes(activity.type) && activity.status !== 'graded' && (
                           <Button
@@ -412,6 +477,11 @@ const CourseDetails = () => {
           </Card>
         </div>
       </div>
+      {alert && (
+        <div className="fixed bottom-6 right-6 z-50">
+          <AlertMessage type={alert.type} message={alert.message} onClose={() => setAlert(null)} />
+        </div>
+      )}
     </DashboardLayout>
   );
 };

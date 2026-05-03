@@ -5,7 +5,6 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
 import { Label } from "@/components/ui/label";
-import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { API_ENDPOINTS, apiGet, apiPost } from "@/lib/api";
 import { useToast } from "@/hooks/use-toast";
 import { IdCard, Search, RefreshCw } from "lucide-react";
@@ -20,21 +19,35 @@ interface StudentItem {
   last_name: string;
 }
 
+interface RfidCheckStudent {
+  student_id?: number | string;
+  student_number?: string;
+  full_name?: string;
+  year_level?: string;
+  section?: string;
+  rfid_card?: string;
+  status?: string;
+  first_name?: string;
+  middle_name?: string;
+  last_name?: string;
+  email?: string;
+}
+
 interface RfidCheckResult {
+  found: boolean;
   assigned: boolean;
-  student?: StudentItem | null;
+  message?: string;
+  student?: RfidCheckStudent | null;
 }
 
 const RFIDManagement = () => {
   const { toast } = useToast();
   const [rfidCode, setRfidCode] = useState("");
-  const [lastCheckedCode, setLastCheckedCode] = useState("");
+  const [selectedRfidCode, setSelectedRfidCode] = useState<string | null>(null);
   const [rfidResult, setRfidResult] = useState<RfidCheckResult | null>(null);
+  const [actionMode, setActionMode] = useState<null | "assign" | "reassign" | "replace">(null);
   const [isChecking, setIsChecking] = useState(false);
-  const [replaceExisting, setReplaceExisting] = useState(false);
-  const [showResultModal, setShowResultModal] = useState(false);
-  const [showRenewList, setShowRenewList] = useState(false);
-  const [renewMode, setRenewMode] = useState(false);
+  const [isSubmitting, setIsSubmitting] = useState(false);
   const [search, setSearch] = useState("");
   const [students, setStudents] = useState<StudentItem[]>([]);
   const [isLoading, setIsLoading] = useState(false);
@@ -57,34 +70,45 @@ const RFIDManagement = () => {
     }
   };
 
-  const checkRfid = async () => {
-    const code = rfidCode.trim();
-    if (!code) return;
+  const resolveRfidResult = (response: any): RfidCheckResult => {
+    const found = typeof response?.found === "boolean"
+      ? response.found
+      : typeof response?.assigned === "boolean"
+        ? response.assigned
+        : !!response?.data || !!response?.student;
+    const student = response?.data || response?.student || null;
+
+    return {
+      found,
+      assigned: found,
+      message: response?.message,
+      student,
+    };
+  };
+
+  const fetchRfidStatus = async (code: string, options?: { clearInput?: boolean }) => {
+    const trimmed = code.trim();
+    if (!trimmed) {
+      toast({
+        title: "Missing RFID",
+        description: "Scan or type an RFID card first.",
+        variant: "destructive",
+      });
+      return;
+    }
 
     setIsChecking(true);
     try {
       const response = await apiGet(
-        `${API_ENDPOINTS.RFID_CARD_CHECK}?rfid_code=${encodeURIComponent(code)}`
+        `${API_ENDPOINTS.RFID_CARD_CHECK}?rfid_code=${encodeURIComponent(trimmed)}`
       );
-      const assigned = !!response?.assigned;
-      if (renewMode && assigned) {
-        toast({
-          title: "RFID already assigned",
-          description: "Renew mode requires an unassigned RFID card.",
-          variant: "destructive",
-        });
-        setRfidResult({ assigned, student: response?.student ?? null });
-        setLastCheckedCode("");
+      const result = resolveRfidResult(response);
+      setSelectedRfidCode(trimmed);
+      setRfidResult(result);
+      setActionMode(null);
+      if (options?.clearInput !== false) {
         setRfidCode("");
-        setShowResultModal(true);
-        setShowRenewList(false);
-        return;
       }
-      setRfidResult({ assigned, student: response?.student ?? null });
-      setLastCheckedCode(code);
-      setRfidCode("");
-      setShowResultModal(true);
-      setShowRenewList(renewMode || false);
     } catch (error: any) {
       toast({
         title: "Error",
@@ -97,9 +121,12 @@ const RFIDManagement = () => {
     }
   };
 
-  const handleAssign = async (studentId: number) => {
-    const code = lastCheckedCode.trim();
-    if (!code) {
+  const checkRfid = async () => {
+    await fetchRfidStatus(rfidCode, { clearInput: true });
+  };
+
+  const selectActionMode = (mode: "assign" | "reassign" | "replace") => {
+    if (!selectedRfidCode || !rfidResult) {
       toast({
         title: "Missing RFID",
         description: "Scan an RFID card first.",
@@ -108,25 +135,127 @@ const RFIDManagement = () => {
       return;
     }
 
+    if (rfidResult.found) {
+      if (mode !== "reassign") {
+        toast({
+          title: "RFID already assigned",
+          description: "Use Reassign for an already used RFID.",
+          variant: "destructive",
+        });
+        return;
+      }
+    } else if (mode === "reassign") {
+      toast({
+        title: "RFID available",
+        description: "Use Assign or Replace for an unassigned RFID card.",
+        variant: "destructive",
+      });
+      return;
+    }
+
+    setActionMode(mode);
+  };
+
+  const handleAssign = async (student: StudentItem) => {
+    if (!actionMode) {
+      toast({
+        title: "Select an action",
+        description: "Choose Assign, Reassign, or Replace from the RFID result panel.",
+        variant: "destructive",
+      });
+      return;
+    }
+
+    if (!selectedRfidCode) {
+      toast({
+        title: "Missing RFID",
+        description: "Scan an RFID card first.",
+        variant: "destructive",
+      });
+      return;
+    }
+
+    if (actionMode === "assign" && rfidResult?.found) {
+      toast({
+        title: "RFID already assigned",
+        description: "Use Reassign for an already used RFID.",
+        variant: "destructive",
+      });
+      return;
+    }
+
+    if (actionMode === "reassign" && !rfidResult?.found) {
+      toast({
+        title: "RFID not assigned",
+        description: "Use Assign or Replace for an available RFID card.",
+        variant: "destructive",
+      });
+      return;
+    }
+
+    if (actionMode === "replace" && rfidResult?.found) {
+      toast({
+        title: "RFID already assigned",
+        description: "Replace requires an available RFID card.",
+        variant: "destructive",
+      });
+      return;
+    }
+
+    if (actionMode === "assign" && student.rfid_card) {
+      toast({
+        title: "Student already has RFID",
+        description: "Use Replace mode to swap the student RFID.",
+        variant: "destructive",
+      });
+      return;
+    }
+
+    if (actionMode === "replace" && !student.rfid_card) {
+      toast({
+        title: "No RFID to replace",
+        description: "This student has no RFID. Use Assign instead.",
+        variant: "destructive",
+      });
+      return;
+    }
+
+    if (actionMode === "reassign" && rfidResult?.student?.student_id) {
+      const assignedId = Number(rfidResult.student.student_id);
+      if (!Number.isNaN(assignedId) && assignedId === student.id) {
+        toast({
+          title: "Already assigned",
+          description: "This RFID already belongs to the selected student.",
+          variant: "destructive",
+        });
+        return;
+      }
+    }
+
+    setIsSubmitting(true);
     try {
-      await apiPost(API_ENDPOINTS.STUDENT_ASSIGN_RFID(studentId), {
-        rfid_code: code,
-        replace_existing: replaceExisting,
+      await apiPost(API_ENDPOINTS.STUDENT_ASSIGN_RFID(student.id), {
+        rfid_code: selectedRfidCode,
+        replace_existing: actionMode === "reassign",
+        mode: actionMode,
       });
 
       toast({
-        title: "RFID assigned",
-        description: "RFID card saved for this student.",
+        title: "RFID updated",
+        description: "RFID card updated for the selected student.",
       });
 
       await loadStudents(search.trim());
-      await checkRfid();
+      await fetchRfidStatus(selectedRfidCode, { clearInput: false });
+      setActionMode(null);
     } catch (error: any) {
       toast({
         title: "Error",
-        description: error?.message || "Failed to assign RFID card.",
+        description: error?.message || "Failed to update RFID card.",
         variant: "destructive",
       });
+    } finally {
+      setIsSubmitting(false);
     }
   };
 
@@ -201,9 +330,11 @@ const RFIDManagement = () => {
 
   const assignedStudent = rfidResult?.student;
   const assignedName = assignedStudent
-    ? `${assignedStudent.first_name} ${assignedStudent.last_name}`
+    ? (assignedStudent.full_name
+        || [assignedStudent.first_name, assignedStudent.middle_name, assignedStudent.last_name]
+          .filter(Boolean)
+          .join(" "))
     : null;
-  const shouldShowStudents = renewMode ? showRenewList : !rfidResult?.assigned || showRenewList;
 
   return (
     <DashboardLayout>
@@ -222,71 +353,133 @@ const RFIDManagement = () => {
           </div>
         </div>
 
-        <Card>
-          <CardHeader>
-            <CardTitle className="flex items-center gap-2">
-              <IdCard className="h-5 w-5" />
-              Scan RFID Card
-            </CardTitle>
-            <CardDescription>
-              Scan the RFID card to check if it is already assigned.
-            </CardDescription>
-          </CardHeader>
-          <CardContent className="space-y-4">
-            <label className="flex items-center gap-2 text-sm text-muted-foreground">
-              <input
-                type="checkbox"
-                checked={renewMode}
-                onChange={(event) => {
-                  setRenewMode(event.target.checked);
-                  setShowRenewList(false);
-                  setRfidResult(null);
-                  setLastCheckedCode("");
-                }}
-              />
-              Renew student RFID (scan new unassigned card)
-            </label>
-            <div className="flex flex-col gap-3 sm:flex-row sm:items-end">
-              <div className="flex-1">
-                <Label>RFID Code</Label>
-                <Input
-                  ref={inputRef}
-                  value={rfidCode}
-                  onChange={(event) => setRfidCode(event.target.value)}
-                  onKeyDown={(event) => {
-                    if (event.key === "Enter") {
-                      event.preventDefault();
-                      checkRfid();
-                    }
-                  }}
-                  placeholder={renewMode ? "Tap new unassigned RFID card..." : "Tap RFID card..."}
-                  className="text-center text-lg font-mono bg-gradient-to-r from-purple-50 to-blue-50 border-2 border-purple-300 focus:border-purple-600"
-                />
-              </div>
-              <Button onClick={checkRfid} disabled={isChecking || !rfidCode.trim()}>
-                {isChecking ? "Checking" : "Check"}
-              </Button>
-            </div>
-
-            <p className="text-sm text-muted-foreground">
-              Scan a card to check its status. Results appear in a modal.
-            </p>
-
-            {!renewMode && (
-              <label className="flex items-center gap-2 text-sm text-muted-foreground">
-                <input
-                  type="checkbox"
-                  checked={replaceExisting}
-                  onChange={(event) => setReplaceExisting(event.target.checked)}
-                />
-                Replace existing assignment if the card is already used
-              </label>
-            )}
-          </CardContent>
-        </Card>
-
-        {shouldShowStudents && (
+        <div className="grid gap-6 lg:grid-cols-[1.1fr_0.9fr]">
           <Card>
+            <CardHeader>
+              <CardTitle className="flex items-center gap-2">
+                <IdCard className="h-5 w-5" />
+                Scan RFID Card
+              </CardTitle>
+              <CardDescription>
+                Scan or type an RFID card to check its status.
+              </CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-4">
+              <div className="flex flex-col gap-3 sm:flex-row sm:items-end">
+                <div className="flex-1">
+                  <Label>RFID Code</Label>
+                  <Input
+                    ref={inputRef}
+                    value={rfidCode}
+                    onChange={(event) => setRfidCode(event.target.value)}
+                    onKeyDown={(event) => {
+                      if (event.key === "Enter") {
+                        event.preventDefault();
+                        checkRfid();
+                      }
+                    }}
+                    placeholder="Tap RFID card..."
+                    className="text-center text-lg font-mono bg-gradient-to-r from-purple-50 to-blue-50 border-2 border-purple-300 focus:border-purple-600"
+                  />
+                </div>
+                <Button onClick={checkRfid} disabled={isChecking || !rfidCode.trim()}>
+                  {isChecking ? "Checking" : "Check"}
+                </Button>
+              </div>
+
+              <p className="text-sm text-muted-foreground">
+                Press Enter after scanning to load the RFID status.
+              </p>
+            </CardContent>
+          </Card>
+
+          <Card>
+            <CardHeader>
+              <CardTitle>RFID Result</CardTitle>
+              <CardDescription>Live RFID status and next actions.</CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-4">
+              {!selectedRfidCode || !rfidResult ? (
+                <div className="rounded-lg border border-dashed border-border p-4 text-sm text-muted-foreground">
+                  Scan or type an RFID card to view its status.
+                </div>
+              ) : rfidResult.found ? (
+                <div className="space-y-4">
+                  <div className="space-y-2">
+                    <p className="text-lg font-semibold">RFID Already Assigned</p>
+                    <Badge className="bg-amber-100 text-amber-700">Assigned</Badge>
+                    <p className="text-sm text-muted-foreground">
+                      RFID Code: <span className="font-mono font-semibold">{selectedRfidCode}</span>
+                    </p>
+                    {assignedName && (
+                      <p className="text-sm">
+                        Assigned to: <span className="font-semibold">{assignedName}</span>
+                      </p>
+                    )}
+                    {assignedStudent?.student_number && (
+                      <p className="text-xs text-muted-foreground">
+                        Student ID: {assignedStudent.student_number}
+                      </p>
+                    )}
+                    {(assignedStudent?.year_level || assignedStudent?.section) && (
+                      <p className="text-xs text-muted-foreground">
+                        {assignedStudent.year_level || ""} {assignedStudent.section || ""}
+                      </p>
+                    )}
+                    <p className="text-xs text-muted-foreground">
+                      Use Reassign only if this RFID was assigned to the wrong student.
+                    </p>
+                  </div>
+                  <div className="flex flex-wrap gap-2">
+                    <Button
+                      variant={actionMode === "reassign" ? "default" : "outline"}
+                      onClick={() => selectActionMode("reassign")}
+                    >
+                      Reassign RFID
+                    </Button>
+                  </div>
+                </div>
+              ) : (
+                <div className="space-y-4">
+                  <div className="space-y-2">
+                    <p className="text-lg font-semibold">RFID Available</p>
+                    <Badge className="bg-emerald-100 text-emerald-700">Available</Badge>
+                    <p className="text-sm text-muted-foreground">
+                      RFID Code: <span className="font-mono font-semibold">{selectedRfidCode}</span>
+                    </p>
+                    <p className="text-sm text-muted-foreground">
+                      This RFID card is available for assignment.
+                    </p>
+                    <p className="text-xs text-muted-foreground">
+                      Use Assign for students with no RFID. Use Replace when a student lost or damaged their old card.
+                    </p>
+                  </div>
+                  <div className="flex flex-wrap gap-2">
+                    <Button
+                      variant={actionMode === "assign" ? "default" : "outline"}
+                      onClick={() => selectActionMode("assign")}
+                    >
+                      Assign to Student
+                    </Button>
+                    <Button
+                      variant={actionMode === "replace" ? "default" : "outline"}
+                      onClick={() => selectActionMode("replace")}
+                    >
+                      Replace Student RFID
+                    </Button>
+                  </div>
+                </div>
+              )}
+              {actionMode && (
+                <div className="rounded-lg border border-border bg-muted/40 p-3 text-xs text-muted-foreground">
+                  Action mode active: <span className="font-semibold">{actionMode}</span>. Select a student below.
+                </div>
+              )}
+            </CardContent>
+          </Card>
+        </div>
+
+        <Card>
           <CardHeader>
             <CardTitle className="flex items-center gap-2">
               <Search className="h-5 w-5" />
@@ -297,6 +490,14 @@ const RFIDManagement = () => {
             </CardDescription>
           </CardHeader>
           <CardContent className="space-y-4">
+            {actionMode && (
+              <div className="rounded-lg border border-dashed border-border p-3 text-sm">
+                {actionMode === "assign" && "Assign mode active: select a student with no RFID."}
+                {actionMode === "reassign" && "Reassign mode active: choose the correct student owner."}
+                {actionMode === "replace" && "Replace mode active: choose the student whose card will be replaced."}
+              </div>
+            )}
+
             <div className="flex flex-col gap-3 sm:flex-row sm:items-center">
               <div className="flex-1">
                 <Input
@@ -317,88 +518,67 @@ const RFIDManagement = () => {
               <div className="text-sm text-muted-foreground">No active students found.</div>
             ) : (
               <div className="space-y-2">
-                {students.map((student) => (
-                  <div key={student.id} className="rounded-lg border border-border p-3 flex flex-wrap items-center justify-between gap-3">
-                    <div>
-                      <p className="font-semibold">
-                        {student.first_name} {student.last_name}
-                      </p>
-                      <p className="text-xs text-muted-foreground">
-                        MCAF ID: {student.student_id}
-                      </p>
+                {students.map((student) => {
+                  const assignedOwnerId = assignedStudent?.student_id ? Number(assignedStudent.student_id) : NaN;
+                  const isCurrentOwner = !Number.isNaN(assignedOwnerId) && assignedOwnerId === student.id;
+                  const hasRfid = !!student.rfid_card;
+                  const actionLabel = actionMode === "assign"
+                    ? "Assign RFID"
+                    : actionMode === "reassign"
+                      ? "Reassign Here"
+                      : "Replace RFID";
+                  const actionHint = actionMode === "assign" && hasRfid
+                    ? "Student already has an RFID. Use Replace instead."
+                    : actionMode === "replace" && !hasRfid
+                      ? "Student has no RFID to replace. Use Assign instead."
+                      : actionMode === "reassign" && isCurrentOwner
+                        ? "Already assigned to this student."
+                        : undefined;
+                  const isActionDisabled =
+                    !actionMode
+                    || !selectedRfidCode
+                    || isSubmitting
+                    || (actionMode === "assign" && rfidResult?.found)
+                    || (actionMode === "assign" && hasRfid)
+                    || (actionMode === "replace" && rfidResult?.found)
+                    || (actionMode === "replace" && !hasRfid)
+                    || (actionMode === "reassign" && !rfidResult?.found)
+                    || (actionMode === "reassign" && isCurrentOwner);
+
+                  return (
+                    <div key={student.id} className="rounded-lg border border-border p-3 flex flex-wrap items-center justify-between gap-3">
+                      <div>
+                        <p className="font-semibold">
+                          {student.first_name} {student.last_name}
+                        </p>
+                        <p className="text-xs text-muted-foreground">
+                          MCAF ID: {student.student_id}
+                        </p>
+                      </div>
+                      <div className="flex items-center gap-2">
+                        <Badge className={student.rfid_card ? "bg-blue-100 text-blue-700" : "bg-muted text-muted-foreground"}>
+                          {student.rfid_card ? `RFID: ${student.rfid_card}` : "No RFID"}
+                        </Badge>
+                        {actionMode && (
+                          <Button
+                            size="sm"
+                            disabled={isActionDisabled}
+                            onClick={() => handleAssign(student)}
+                            title={actionHint}
+                          >
+                            {isCurrentOwner && actionMode === "reassign" ? "Current Owner" : actionLabel}
+                          </Button>
+                        )}
+                      </div>
                     </div>
-                    <div className="flex items-center gap-2">
-                      <Badge className={student.rfid_card ? "bg-blue-100 text-blue-700" : "bg-muted text-muted-foreground"}>
-                        {student.rfid_card ? `RFID: ${student.rfid_card}` : "No RFID"}
-                      </Badge>
-                      <Button size="sm" onClick={() => handleAssign(student.id)}>
-                        Assign RFID
-                      </Button>
-                    </div>
-                  </div>
-                ))}
+                  );
+                })}
               </div>
             )}
           </CardContent>
         </Card>
-        )}
       </div>
 
-      <Dialog open={showResultModal} onOpenChange={setShowResultModal}>
-        <DialogContent>
-          <DialogHeader>
-            <DialogTitle>RFID Check Result</DialogTitle>
-            <DialogDescription>Review the RFID status before assigning.</DialogDescription>
-          </DialogHeader>
-          <div className="space-y-3 text-sm">
-            {rfidResult ? (
-              <>
-                <Badge className={rfidResult.assigned ? "bg-amber-100 text-amber-700" : "bg-emerald-100 text-emerald-700"}>
-                  {rfidResult.assigned ? "Assigned" : "Available"}
-                </Badge>
-                {lastCheckedCode && (
-                  <p>
-                    RFID Code: <span className="font-mono font-semibold">{lastCheckedCode}</span>
-                  </p>
-                )}
-                {rfidResult.assigned && assignedName ? (
-                  <p>
-                    Assigned to: <span className="font-semibold">{assignedName}</span>
-                    {assignedStudent?.student_id ? ` (${assignedStudent.student_id})` : ""}
-                  </p>
-                ) : (
-                  <p>This RFID card is available for assignment.</p>
-                )}
-                {rfidResult.assigned && (
-                  <Button
-                    variant="outline"
-                    onClick={() => {
-                      setShowRenewList(true);
-                      setShowResultModal(false);
-                      setReplaceExisting(true);
-                    }}
-                  >
-                    Renew card
-                  </Button>
-                )}
-                {!rfidResult.assigned && renewMode && (
-                  <Button
-                    variant="outline"
-                    onClick={() => {
-                      setShowRenewList(true);
-                      setShowResultModal(false);
-                    }}
-                  >
-                    Choose student
-                  </Button>
-                )}
-              </>
-            ) : (
-              <p className="text-muted-foreground">No RFID result yet.</p>
-            )}
-          </div>
-        </DialogContent>
-      </Dialog>
     </DashboardLayout>
   );
 };

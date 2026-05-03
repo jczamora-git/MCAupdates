@@ -198,11 +198,34 @@ class StudentController extends Controller
             }
 
             $student = $this->StudentModel->get_by_rfid_card($rfidCode);
+            $found = !empty($student);
+            $fullName = null;
+            if ($found) {
+                $fullName = trim(($student['first_name'] ?? '') . ' ' . ($student['middle_name'] ?? '') . ' ' . ($student['last_name'] ?? ''));
+                $fullName = trim(preg_replace('/\s+/', ' ', $fullName));
+            }
+
+            $payload = $found ? [
+                'student_id' => $student['id'] ?? null,
+                'student_number' => $student['student_id'] ?? null,
+                'full_name' => $fullName,
+                'year_level' => $student['year_level'] ?? null,
+                'section' => $student['section_name'] ?? null,
+                'rfid_card' => $student['rfid_card'] ?? $rfidCode,
+                'status' => $student['status'] ?? null,
+                'first_name' => $student['first_name'] ?? null,
+                'middle_name' => $student['middle_name'] ?? null,
+                'last_name' => $student['last_name'] ?? null,
+                'email' => $student['email'] ?? null
+            ] : null;
 
             echo json_encode([
                 'success' => true,
-                'assigned' => !empty($student),
-                'student' => $student ?: null
+                'assigned' => $found,
+                'found' => $found,
+                'message' => $found ? 'RFID card found.' : 'No student is registered with this RFID card.',
+                'student' => $payload,
+                'data' => $payload
             ]);
         } catch (Exception $e) {
             http_response_code(500);
@@ -291,6 +314,16 @@ class StudentController extends Controller
             $data = json_decode(file_get_contents('php://input'), true);
             $rfidCode = trim($data['rfid_code'] ?? '');
             $replaceExisting = !empty($data['replace_existing']);
+            $mode = trim($data['mode'] ?? 'assign');
+
+            if (!in_array($mode, ['assign', 'reassign', 'replace'], true)) {
+                http_response_code(400);
+                echo json_encode([
+                    'success' => false,
+                    'message' => 'Invalid mode'
+                ]);
+                return;
+            }
 
             if ($rfidCode === '') {
                 http_response_code(400);
@@ -311,9 +344,29 @@ class StudentController extends Controller
                 return;
             }
 
+            $currentRfid = trim($student['rfid_card'] ?? '');
+
             $assigned = $this->StudentModel->get_by_rfid_card($rfidCode);
-            if (!empty($assigned) && (int) $assigned['id'] !== (int) $id) {
-                if (!$replaceExisting) {
+            if (!empty($assigned)) {
+                if ((int) $assigned['id'] === (int) $id) {
+                    if ($mode === 'assign' || $mode === 'reassign') {
+                        http_response_code(409);
+                        echo json_encode([
+                            'success' => false,
+                            'message' => 'RFID card is already assigned to this student',
+                            'student' => $assigned
+                        ]);
+                        return;
+                    }
+
+                    echo json_encode([
+                        'success' => true,
+                        'message' => 'RFID card already assigned to this student'
+                    ]);
+                    return;
+                }
+
+                if ($mode === 'assign') {
                     http_response_code(409);
                     echo json_encode([
                         'success' => false,
@@ -323,7 +376,44 @@ class StudentController extends Controller
                     return;
                 }
 
+                if ($mode === 'replace') {
+                    http_response_code(409);
+                    echo json_encode([
+                        'success' => false,
+                        'message' => 'RFID card is already assigned. Use reassign instead.',
+                        'student' => $assigned
+                    ]);
+                    return;
+                }
+
                 $this->StudentModel->clear_rfid_card($assigned['id']);
+            } else {
+                if ($mode === 'reassign') {
+                    http_response_code(409);
+                    echo json_encode([
+                        'success' => false,
+                        'message' => 'RFID card is not assigned yet. Use assign instead.'
+                    ]);
+                    return;
+                }
+            }
+
+            if ($mode === 'assign' && $currentRfid !== '' && !$replaceExisting) {
+                http_response_code(409);
+                echo json_encode([
+                    'success' => false,
+                    'message' => 'Student already has an RFID card. Use replace mode instead.'
+                ]);
+                return;
+            }
+
+            if ($mode === 'replace' && $currentRfid === '') {
+                http_response_code(409);
+                echo json_encode([
+                    'success' => false,
+                    'message' => 'Student does not have an RFID card to replace.'
+                ]);
+                return;
             }
 
             $updated = $this->StudentModel->update_rfid_card($id, $rfidCode);

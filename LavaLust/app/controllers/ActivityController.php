@@ -1037,9 +1037,10 @@ class ActivityController extends Controller
             $studentIdInt = (int)$studentId;
             $courseIdInt = (int)$courseId;
             
-                $sql = "SELECT a.*, ag.grade as student_grade, ag.status as grade_status, ag.id as grade_id, ag.created_at as grade_created_at 
+                $sql = "SELECT a.*, ag.grade as student_grade, ag.status as grade_status, ag.id as grade_id, ag.created_at as grade_created_at, aset.available_from as settings_available_from, aset.available_until as settings_available_until 
                     FROM activities a 
                     LEFT JOIN activity_grades ag ON a.id = ag.activity_id AND ag.student_id = ? 
+                    LEFT JOIN activity_settings aset ON a.id = aset.activity_id 
                     WHERE a.subject_id = ?";
             
             $params = [$studentIdInt, $courseIdInt];
@@ -1079,6 +1080,16 @@ class ActivityController extends Controller
                         'max_score' => $activity['max_score'],
                         'due_at' => $activity['due_at'],
                         'allow_late_submission' => $activity['allow_late_submission'],
+                        'available_from' => $activity['settings_available_from'] ?? null,
+                        'available_until' => $activity['settings_available_until'] ?? null,
+                        'settings' => [
+                            'available_from' => $activity['settings_available_from'] ?? null,
+                            'available_until' => $activity['settings_available_until'] ?? null
+                        ],
+                        'quiz_settings' => [
+                            'available_from' => $activity['settings_available_from'] ?? null,
+                            'available_until' => $activity['settings_available_until'] ?? null
+                        ],
                         'section_id' => $activity['section_id'],
                         'created_at' => $activity['created_at'],
                         // Student's grade info (null if not graded yet)

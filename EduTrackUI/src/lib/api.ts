@@ -64,6 +64,8 @@ export const API_ENDPOINTS = {
   STUDENTS_EXPORT: `${API_BASE_URL}/api/students/export`,
   STUDENT_ASSIGN_RFID: (id: string | number) => `${API_BASE_URL}/api/students/${id}/rfid`,
   RFID_CARD_CHECK: `${API_BASE_URL}/api/rfid/cards/check`,
+  RFID_SESSIONS: `${API_BASE_URL}/api/rfid/sessions`,
+  RFID_SCANS: `${API_BASE_URL}/api/rfid/scans`,
   
   // Subjects
   SUBJECTS: `${API_BASE_URL}/api/subjects`,
@@ -133,6 +135,12 @@ export const API_ENDPOINTS = {
   PAYMENT_PLAN_INSTALLMENTS: (plan_id: string | number) => `${API_BASE_URL}/api/payment-plans/${plan_id}/installments`,
   PAYMENT_PLAN_MARK_NOTIFICATIONS_READ: (plan_id: string | number) => `${API_BASE_URL}/api/payment-plans/${plan_id}/mark-notifications-read`,
   RFID_VERIFY_PASSKEY: `${API_BASE_URL}/api/rfid/verify-passkey`,
+  RFID_VERIFY_ADMIN_PASSWORD: `${API_BASE_URL}/api/rfid/verify-admin-password`,
+  RFID_STATS: `${API_BASE_URL}/api/rfid/stats`,
+  RFID_SESSION_TEMPLATES: `${API_BASE_URL}/api/rfid/session-templates`,
+  RFID_SESSION_TEMPLATE: (id: string | number) => `${API_BASE_URL}/api/rfid/session-templates/${id}`,
+  RFID_SESSION_TEMPLATE_STATUS: (id: string | number) => `${API_BASE_URL}/api/rfid/session-templates/${id}/status`,
+  RFID_SESSION_TEMPLATE_START: (id: string | number) => `${API_BASE_URL}/api/rfid/session-templates/${id}/start`,
   
   // Payment Schedule Templates
   PAYMENT_SCHEDULE_TEMPLATES: `${API_BASE_URL}/api/payment-schedule-templates`,

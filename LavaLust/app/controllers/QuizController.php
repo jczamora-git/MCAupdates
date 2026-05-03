@@ -1140,14 +1140,14 @@ class QuizController extends Controller {
         }
 
         $availableUntil = $availableUntilRaw ? strtotime($availableUntilRaw) : null;
-        $allowLate = !empty($activity['allow_late_submission']);
+        $allowLate = isset($activity['allow_late_submission']) && (int)$activity['allow_late_submission'] === 1;
 
         if ($availableFrom && $now < $availableFrom) {
-            return ['allowed' => false, 'code' => 403, 'message' => 'Quiz is not yet available'];
+            return ['allowed' => false, 'code' => 403, 'message' => 'This quiz is not yet available.'];
         }
 
         if ($availableUntil && $now > $availableUntil && !$allowLate) {
-            return ['allowed' => false, 'code' => 403, 'message' => 'Quiz is already closed'];
+            return ['allowed' => false, 'code' => 403, 'message' => 'This quiz is already closed. Late submissions are not allowed.'];
         }
 
         return ['allowed' => true, 'code' => 200, 'message' => 'OK'];

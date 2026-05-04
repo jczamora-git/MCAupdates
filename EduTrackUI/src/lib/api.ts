@@ -62,6 +62,7 @@ export const API_ENDPOINTS = {
   STUDENT_PORTAL_ACCOUNT: (id: string | number) => `${API_BASE_URL}/api/students/${id}/portal-account`,
   STUDENTS_IMPORT: `${API_BASE_URL}/api/students/import`,
   STUDENTS_EXPORT: `${API_BASE_URL}/api/students/export`,
+  STUDENT_SEND_PASSWORD_RESET_LINK: (id: string | number) => `${API_BASE_URL}/api/students/${id}/send-password-reset-link`,
   STUDENT_ASSIGN_RFID: (id: string | number) => `${API_BASE_URL}/api/students/${id}/rfid`,
   RFID_CARD_CHECK: `${API_BASE_URL}/api/rfid/cards/check`,
   RFID_SESSIONS: `${API_BASE_URL}/api/rfid/sessions`,
@@ -284,6 +285,7 @@ export const API_ENDPOINTS = {
   REPORTS_STUDENTS: `${API_BASE_URL}/api/reports/students`,
   REPORTS_STUDENT_PDF: (id: string | number) => `${API_BASE_URL}/api/reports/student/${id}/pdf`,
   REPORTS_BULK_PDF: `${API_BASE_URL}/api/reports/bulk/pdf`,
+  REPORTS_ADMIN_PDF: `${API_BASE_URL}/api/reports/export-pdf`,
 
   // Messages (Student & Teacher)
   MESSAGES: `${API_BASE_URL}/api/messages`,
@@ -363,6 +365,29 @@ export async function apiPost(url: string, data: any) {
     // If parsing fails, return an object so callers don't crash
     return { success: true };
   }
+}
+
+export async function apiPostBlob(url: string, data: any) {
+  const response = await fetch(url, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+    },
+    credentials: 'include',
+    body: JSON.stringify(data),
+  });
+
+  if (!response.ok) {
+    const text = await response.text();
+    try {
+      const parsed = text ? JSON.parse(text) : {};
+      throw new Error(parsed.message || 'Request failed');
+    } catch (e: any) {
+      throw new Error((e && e.message) || 'Request failed');
+    }
+  }
+
+  return await response.blob();
 }
 
 export async function apiGet(url: string) {
@@ -541,4 +566,3 @@ export async function apiUploadFile(url: string, file: File, fieldName: string =
 
 // Alias for backward compatibility
 export const apiUpload = apiUploadFile;
-

@@ -8,6 +8,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import CommunicationLoadingModal from "@/components/CommunicationLoadingModal";
 import { API_ENDPOINTS, apiGet, apiPost, apiPut } from "@/lib/api";
 import { useNavigate } from "react-router-dom";
 import {
@@ -43,6 +44,9 @@ interface RFIDScan {
   image_path?: string | null;
   session_id?: number | null;
   notes?: string;
+  sms_sent?: boolean;
+  sms_status?: "sent" | "skipped" | "failed";
+  sms_message?: string;
 }
 
 interface RFIDSession {
@@ -98,6 +102,11 @@ const RFIDAttendance = () => {
   const [checkerCode, setCheckerCode] = useState("");
   const [checkerError, setCheckerError] = useState<string | null>(null);
   const [isCheckingCard, setIsCheckingCard] = useState(false);
+  const [smsModalOpen, setSmsModalOpen] = useState(false);
+  const [smsModalSuccess, setSmsModalSuccess] = useState(false);
+  const [smsModalError, setSmsModalError] = useState(false);
+  const [smsModalMessage, setSmsModalMessage] = useState("");
+  const [smsModalHelper, setSmsModalHelper] = useState("");
   const rfidInputRef = useRef<HTMLInputElement>(null);
   const checkerInputRef = useRef<HTMLInputElement>(null);
   const videoRef = useRef<HTMLVideoElement>(null);
@@ -202,6 +211,36 @@ const RFIDAttendance = () => {
       }
     },
     onSuccess: (data) => {
+      const smsStatus = data?.sms_status as string | undefined;
+      const smsMessage = data?.sms_message as string | undefined;
+
+      if (data.status === "unknown") {
+        setSmsModalSuccess(true);
+        setSmsModalError(false);
+        setSmsModalMessage("No SMS sent");
+        setSmsModalHelper("Unknown RFID card has no linked phone number.");
+      } else if (smsStatus === "sent") {
+        setSmsModalSuccess(true);
+        setSmsModalError(false);
+        setSmsModalMessage("SMS sent successfully");
+        setSmsModalHelper(smsMessage || "Attendance notification has been sent.");
+      } else if (smsStatus === "skipped") {
+        setSmsModalSuccess(true);
+        setSmsModalError(false);
+        setSmsModalMessage("SMS not sent");
+        setSmsModalHelper(smsMessage || "No phone number found for this student, but attendance was recorded.");
+      } else if (smsStatus === "failed") {
+        setSmsModalSuccess(false);
+        setSmsModalError(true);
+        setSmsModalMessage("Attendance recorded, but SMS failed");
+        setSmsModalHelper(smsMessage || "Please check SMS settings or try again later.");
+      } else {
+        setSmsModalSuccess(true);
+        setSmsModalError(false);
+        setSmsModalMessage("SMS status unavailable");
+        setSmsModalHelper("Attendance was recorded successfully.");
+      }
+
       setDetailsMode("scan");
       setCheckerDetails(null);
       setCurrentScan(data);
@@ -235,6 +274,9 @@ const RFIDAttendance = () => {
     },
     onError: (error: any) => {
       console.error("Mutation Error:", error);
+      setSmsModalOpen(false);
+      setSmsModalSuccess(false);
+      setSmsModalError(false);
       const messageText = error?.message || "Failed to record scan. Check console for details.";
 
       if (messageText.toLowerCase().includes("already recorded")) {
@@ -551,6 +593,12 @@ const RFIDAttendance = () => {
 
         const activeType = activeSession.session_type || scanType;
 
+        setSmsModalOpen(true);
+        setSmsModalSuccess(false);
+        setSmsModalError(false);
+        setSmsModalMessage("Sending SMS notification...");
+        setSmsModalHelper("Please wait while we record attendance and notify the contact number.");
+
         const capturedImage = captureImage();
         recordScan({
           rfid_code: trimmedCode,
@@ -808,6 +856,13 @@ const RFIDAttendance = () => {
         checkerInputRef.current?.focus();
       }
     }, 50);
+  };
+
+  const handleSmsModalComplete = () => {
+    setSmsModalOpen(false);
+    if (attendanceMode) {
+      setTimeout(() => rfidInputRef.current?.focus(), 50);
+    }
   };
 
   useEffect(() => {
@@ -1354,6 +1409,19 @@ const RFIDAttendance = () => {
           </div>
         </DialogContent>
       </Dialog>
+
+      <CommunicationLoadingModal
+        isOpen={smsModalOpen}
+        isSuccess={smsModalSuccess}
+        isError={smsModalError}
+        type="sms"
+        loadingMessage={smsModalMessage}
+        successMessage={smsModalMessage}
+        errorMessage={smsModalMessage}
+        helperText={smsModalHelper}
+        onComplete={handleSmsModalComplete}
+        autoCloseDuration={2500}
+      />
 
       {/* Scan Details Dialog */}
       <Dialog

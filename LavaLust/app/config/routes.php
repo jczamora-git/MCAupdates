@@ -131,6 +131,7 @@ $router->get('/api/students/{id}/courses/teachers', 'StudentController::api_get_
 $router->get('/api/students/{id}/activities', 'StudentController::api_get_activities_for_student')->where_number('id');
 $router->get('/api/students/{id}/courses-activities', 'StudentController::api_get_courses_activities')->where_number('id');
 $router->get('/api/students/{id}', 'StudentController::api_get_student')->where_number('id');
+$router->post('/api/students/{id}/send-password-reset-link', 'StudentController::api_send_password_reset_link')->where_number('id');
 $router->post('/api/students', 'StudentController::api_create_student');
 $router->get('/api/students/export', 'StudentController::api_export_students');
 $router->post('/api/students/import', 'StudentController::api_import_students');
@@ -498,6 +499,7 @@ $router->get('/api/reports/students', 'ReportController::api_get_students');
 $router->get('/api/reports/student/{student_id}/pdf', 'ReportController::api_generate_student_report')->where_number('student_id');
 $router->get('/api/reports/debug/student/{student_id}/grades', 'ReportController::api_debug_student_grades')->where_number('student_id');
 $router->post('/api/reports/bulk/pdf', 'ReportController::api_generate_bulk_reports');
+$router->post('/api/reports/export-pdf', 'ReportController::api_export_admin_report_pdf');
 
 // API Routes - Final Grades (Teacher)
 $router->post('/api/final-grades/submit', 'FinalGradesController::api_submit_grades');

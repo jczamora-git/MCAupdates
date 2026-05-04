@@ -4,7 +4,7 @@ import { useAuth } from "@/hooks/useAuth";
 import { DashboardLayout } from "@/components/DashboardLayout";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
-import { Award, Save, ArrowLeft, Search, Plus, Pencil, Trash2, GripVertical } from "lucide-react";
+import { Award, Save, ArrowLeft, Search, Plus, Pencil, Trash2, GripVertical, Eye, EyeOff } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -112,6 +112,8 @@ const GradeInputEdit = () => {
   const [manageMergedDialogOpen, setManageMergedDialogOpen] = useState(false);
   const [savingMergedInput, setSavingMergedInput] = useState(false);
   const [editingMergedItemId, setEditingMergedItemId] = useState<string | null>(null);
+  const [showQuarterGrade, setShowQuarterGrade] = useState(false);
+  const [quarterGradeVisibilityTouched, setQuarterGradeVisibilityTouched] = useState(false);
   const [mergeForm, setMergeForm] = useState({
     title: "",
     component: "written",
@@ -560,6 +562,25 @@ const GradeInputEdit = () => {
     [componentItems]
   );
 
+  const hasQuarterlyAssessmentItem = useMemo(() => {
+    return Array.isArray(componentItems?.quarterly) && componentItems.quarterly.length > 0;
+  }, [componentItems]);
+
+  const hasFinalExam = useMemo(() => {
+    return Array.isArray(componentItems?.quarterly)
+      && componentItems.quarterly.some((item: any) => {
+        const title = String(item.title ?? '').toLowerCase();
+        const type = String(item.activity_type ?? item.type ?? '').toLowerCase();
+        return type === 'exam' || title.includes('exam') || title.includes('final');
+      });
+  }, [componentItems]);
+
+  useEffect(() => {
+    if (!quarterGradeVisibilityTouched) {
+      setShowQuarterGrade(hasFinalExam || hasQuarterlyAssessmentItem);
+    }
+  }, [hasFinalExam, hasQuarterlyAssessmentItem, quarterGradeVisibilityTouched]);
+
   const mergeCandidates = useMemo(() => {
     if (!Array.isArray(gradingItems)) return [];
     return gradingItems
@@ -981,6 +1002,48 @@ const GradeInputEdit = () => {
       })
     );
 
+    const quarterGradeGroup = columnHelper.group({
+      id: 'quarter-grade',
+      header: `${selectedQuarter || 'Quarter'} Grade`,
+      columns: [
+        columnHelper.display({
+          id: 'initial_grade',
+          header: 'Initial',
+          size: 100,
+          enableSorting: true,
+          cell: (info) => {
+            const row = info.row.original;
+            if (row.__hps) {
+              const totalWeight = currentWeights.ww + currentWeights.pt + currentWeights.qa;
+              return <span className="font-bold text-purple-700">{totalWeight.toFixed(2)}</span>;
+            }
+            const value = getRowMetrics(row).initial;
+            return <span className="font-bold text-purple-700">{value.toFixed(2)}</span>;
+          },
+        }),
+        columnHelper.display({
+          id: 'final_grade',
+          header: 'Grade',
+          size: 100,
+          enableSorting: true,
+          cell: (info) => {
+            const row = info.row.original;
+            if (row.__hps) {
+              const totalWeight = currentWeights.ww + currentWeights.pt + currentWeights.qa;
+              return <span className="font-bold text-purple-800">{Math.round(totalWeight)}</span>;
+            }
+            const metric = getRowMetrics(row);
+            const isPass = metric.final >= 75;
+            return (
+              <span className={`${isPass ? 'bg-green-100 text-green-900 border border-green-300' : 'bg-red-100 text-red-900 border border-red-300'} px-3 py-1.5 rounded-md font-bold shadow-sm`}>
+                {metric.final}
+              </span>
+            );
+          },
+        }),
+      ],
+    });
+
     return [
       columnHelper.group({
         id: 'student-info',
@@ -1147,47 +1210,7 @@ const GradeInputEdit = () => {
           }),
         ],
       }),
-      columnHelper.group({
-        id: 'quarter-grade',
-        header: `${selectedQuarter || 'Quarter'} Grade`,
-        columns: [
-          columnHelper.display({
-            id: 'initial_grade',
-            header: 'Initial',
-            size: 100,
-            enableSorting: true,
-            cell: (info) => {
-              const row = info.row.original;
-              if (row.__hps) {
-                const totalWeight = currentWeights.ww + currentWeights.pt + currentWeights.qa;
-                return <span className="font-bold text-purple-700">{totalWeight.toFixed(2)}</span>;
-              }
-              const value = getRowMetrics(row).initial;
-              return <span className="font-bold text-purple-700">{value.toFixed(2)}</span>;
-            },
-          }),
-          columnHelper.display({
-            id: 'final_grade',
-            header: 'Grade',
-            size: 100,
-            enableSorting: true,
-            cell: (info) => {
-              const row = info.row.original;
-              if (row.__hps) {
-                const totalWeight = currentWeights.ww + currentWeights.pt + currentWeights.qa;
-                return <span className="font-bold text-purple-800">{Math.round(totalWeight)}</span>;
-              }
-              const metric = getRowMetrics(row);
-              const isPass = metric.final >= 75;
-              return (
-                <span className={`${isPass ? 'bg-green-100 text-green-900 border border-green-300' : 'bg-red-100 text-red-900 border border-red-300'} px-3 py-1.5 rounded-md font-bold shadow-sm`}>
-                  {metric.final}
-                </span>
-              );
-            },
-          }),
-        ],
-      }),
+      ...(showQuarterGrade ? [quarterGradeGroup] : []),
     ];
   }, [columnHelper, componentItems, currentWeights, getRowMetrics, handleCellValueChanged, quarterlyMaxScore, selectedQuarter, writtenMaxScore, performanceMaxScore]);
 
@@ -1545,6 +1568,10 @@ const GradeInputEdit = () => {
     );
   }
 
+  const pageTitle = courseInfo.code
+    ? `${courseInfo.code} - ${courseInfo.title}${selectedQuarter ? ` (${selectedQuarter})` : ''}`
+    : 'Edit Class Record';
+
   return (
     <div className="h-screen flex flex-col p-4 bg-background">
       {toast && (
@@ -1806,13 +1833,13 @@ const GradeInputEdit = () => {
       {/* Header */}
       <div className="mb-4 flex items-center justify-between">
         <div className="flex items-center gap-4">
-          <Button variant="outline" onClick={() => navigate(-1)}>
+          {/* <Button variant="outline" onClick={() => navigate(-1)}>
             <ArrowLeft className="h-4 w-4 mr-2" />
             Back
-          </Button>
+          </Button> */}
           <div>
             <h1 className="text-2xl font-bold">
-              {courseInfo.code ? `${courseInfo.code} - ${courseInfo.title}` : 'Edit Class Record'}
+              {pageTitle}
             </h1>
             <p className="text-sm text-muted-foreground">
               {courseInfo.code ? `Teacher: ${courseInfo.teacher} | Section: ${courseInfo.section}` : selectedQuarter}
@@ -1830,27 +1857,12 @@ const GradeInputEdit = () => {
           <Button variant="outline" onClick={() => setManageMergedDialogOpen(true)}>
             Manage Merged
           </Button>
-          <Button onClick={handleSaveGrades}>
+          {/* <Button onClick={handleSaveGrades}>
             <Save className="h-4 w-4 mr-2" />
             Save & Close
-          </Button>
+          </Button> */}
         </div>
       </div>
-
-      {/* Course Info Banner */}
-      <Card className="mb-4">
-        <CardContent className="pt-6">
-          <div className="flex items-center justify-between">
-            <div>
-              <p className="font-semibold text-lg">{courseInfo.code} - {courseInfo.title}</p>
-              <p className="text-sm text-muted-foreground">Teacher: {courseInfo.teacher} | Section: {courseInfo.section}</p>
-            </div>
-            <Badge variant="outline" className="text-xs">
-              {selectedQuarter || 'Quarter'}
-            </Badge>
-          </div>
-        </CardContent>
-      </Card>
 
       {/* Students Count */}
       <div className="mb-4 flex items-center justify-between px-2">
@@ -1871,15 +1883,31 @@ const GradeInputEdit = () => {
                 Click cells to edit • Drag column headers to reorder • Sort by clicking column headers
               </CardDescription>
             </div>
-            <div className="relative">
-              <Search className="absolute left-2 top-1/2 transform -translate-y-1/2 h-4 w-4 text-muted-foreground" />
-              <input
-                type="text"
-                placeholder="Search ID / Name..."
-                value={searchQuery}
-                onChange={(e) => setSearchQuery(e.target.value)}
-                className="pl-8 pr-4 py-2 border border-input rounded-md bg-background text-sm focus:outline-none focus:ring-2 focus:ring-primary"
-              />
+            <div className="flex items-center gap-3">
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => {
+                  setQuarterGradeVisibilityTouched(true);
+                  setShowQuarterGrade((prev) => !prev);
+                }}
+              >
+                {showQuarterGrade ? <EyeOff className="h-4 w-4 mr-2" /> : <Eye className="h-4 w-4 mr-2" />}
+                {showQuarterGrade ? "Hide Quarter Grade" : "Show Quarter Grade"}
+              </Button>
+              {!showQuarterGrade && (
+                <span className="text-xs text-muted-foreground">Quarter Grade hidden</span>
+              )}
+              <div className="relative">
+                <Search className="absolute left-2 top-1/2 transform -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+                <input
+                  type="text"
+                  placeholder="Search ID / Name..."
+                  value={searchQuery}
+                  onChange={(e) => setSearchQuery(e.target.value)}
+                  className="pl-8 pr-4 py-2 border border-input rounded-md bg-background text-sm focus:outline-none focus:ring-2 focus:ring-primary"
+                />
+              </div>
             </div>
           </div>
         </CardHeader>

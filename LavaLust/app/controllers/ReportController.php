@@ -14,6 +14,7 @@ class ReportController extends Controller
         parent::__construct();
         // Load StudentModel so we can use $this->StudentModel->get_all() etc.
         $this->call->model('StudentModel');
+        $this->call->helper('pdf_helper');
     }
 
     /**
@@ -405,6 +406,126 @@ class ReportController extends Controller
             echo json_encode([
                 'success' => false,
                 'message' => 'Error generating bulk reports: ' . $e->getMessage()
+            ]);
+        }
+    }
+
+    /**
+     * Export admin reports as a formal PDF.
+     * POST /api/reports/export-pdf
+     */
+    public function api_export_admin_report_pdf()
+    {
+        if (!$this->session->userdata('logged_in')) {
+            api_set_json_headers();
+            http_response_code(401);
+            echo json_encode(['success' => false, 'message' => 'Unauthorized']);
+            return;
+        }
+
+        $role = (string)($this->session->userdata('role') ?? '');
+        if ($role !== 'admin') {
+            api_set_json_headers();
+            http_response_code(403);
+            echo json_encode(['success' => false, 'message' => 'Forbidden']);
+            return;
+        }
+
+        try {
+            $input = json_decode(file_get_contents('php://input'), true);
+            if (!is_array($input)) $input = [];
+
+            $reportType = trim((string)($input['reportType'] ?? ''));
+            $reportTypeLabel = trim((string)($input['reportTypeLabel'] ?? ''));
+            $rows = is_array($input['rows'] ?? null) ? $input['rows'] : [];
+            $summaryCards = is_array($input['summary'] ?? null) ? $input['summary'] : [];
+
+            $reportTitleMap = [
+                'enrollment' => 'Enrollment Report',
+                'payment' => 'Payment Report',
+                'paymentPlan' => 'Payment Plan Report',
+                'uniformOrder' => 'Uniform Order Report',
+                'studentStatus' => 'Student Status Report',
+                'studentGrade' => 'Student Grade Report',
+            ];
+
+            $reportTitle = $reportTitleMap[$reportType] ?? ($reportTypeLabel ?: 'Report');
+            $reportTypeLabel = $reportTypeLabel ?: $reportTitle;
+
+            $generatedBy = trim((string)($input['generatedBy'] ?? $this->session->userdata('email') ?? $this->session->userdata('username') ?? 'Admin'));
+            $generatedAtRaw = app_now();
+            $generatedAt = date('F d, Y h:i A', strtotime($generatedAtRaw));
+
+            $recordCount = count($rows);
+
+            $summaryItems = [];
+            $summaryKeys = [];
+            $summaryItems[] = ['label' => 'Total Records', 'value' => $recordCount];
+            $summaryItems[] = ['label' => 'Report Type', 'value' => $reportTypeLabel];
+            $summaryItems[] = ['label' => 'Generated Date', 'value' => $generatedAt];
+            $summaryKeys['total records'] = true;
+            $summaryKeys['report type'] = true;
+            $summaryKeys['generated date'] = true;
+
+            foreach ($summaryCards as $item) {
+                if (!is_array($item)) continue;
+                $label = trim((string)($item['label'] ?? ''));
+                if ($label === '') continue;
+                $key = strtolower($label);
+                if (isset($summaryKeys[$key])) continue;
+                $summaryKeys[$key] = true;
+                $summaryItems[] = [
+                    'label' => $label,
+                    'value' => $item['value'] ?? '',
+                ];
+            }
+
+            $columns = [];
+            if (!empty($rows) && is_array($rows[0])) {
+                $keys = array_keys($rows[0]);
+                foreach ($keys as $key) {
+                    $label = format_report_label($key);
+                    $columns[] = ['key' => $key, 'label' => $label ?: (string)$key];
+                }
+            }
+
+            $logoDataUri = get_image_data_uri('public/logo.png');
+            if ($logoDataUri === '') {
+                $logoDataUri = get_image_data_uri('public/EduTrack_Logo.png');
+            }
+
+            $html = build_admin_report_html([
+                'reportTitle' => $reportTitle,
+                'reportTypeLabel' => $reportTypeLabel,
+                'generatedBy' => $generatedBy,
+                'generatedAt' => $generatedAt,
+                'recordCount' => $recordCount,
+                'summary' => $summaryItems,
+                'columns' => $columns,
+                'rows' => $rows,
+                'logoDataUri' => $logoDataUri,
+                'footerText' => 'MCA Portal Administrative Reports',
+            ]);
+
+            $safeType = preg_replace('/[^A-Za-z0-9]+/', '_', $reportType ?: 'Report');
+            $filename = 'MCA_' . strtoupper($safeType) . '_Report_' . date('Y-m-d');
+
+            $pdf = generate_pdf_from_html($html, $filename, [
+                'format' => 'Legal',
+                'margin_left' => 15,
+                'margin_right' => 15,
+                'margin_top' => 15,
+                'margin_bottom' => 15,
+            ]);
+
+            output_pdf_to_browser($pdf, $filename, true);
+
+        } catch (Exception $e) {
+            api_set_json_headers();
+            http_response_code(500);
+            echo json_encode([
+                'success' => false,
+                'message' => 'Error generating admin report PDF: ' . $e->getMessage()
             ]);
         }
     }

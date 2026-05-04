@@ -23,3 +23,5 @@ app/config/service-account.json
 *.stTheme.cache
 *.sublime-workspace
 *.sublime-project
+
+/.vscode/sftp.json

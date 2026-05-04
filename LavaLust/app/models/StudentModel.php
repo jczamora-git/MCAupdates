@@ -206,7 +206,7 @@ class StudentModel extends Model
         return $this->db->table($this->table)
                         ->join('users', 'students.user_id = users.id')
                         ->left_join('sections', 'students.section_id = sections.id')
-                        ->select('students.id, students.user_id, students.student_id, students.rfid_card, students.year_level, students.section_id, students.status, users.first_name, users.middle_name, users.last_name, users.email, users.role, sections.name as section_name')
+                        ->select('students.id, students.user_id, students.student_id, students.rfid_card, students.year_level, students.section_id, students.status, users.first_name, users.middle_name, users.last_name, users.email, users.phone, users.role, sections.name as section_name')
                         ->where('students.rfid_card', $rfidCode)
                         ->get();
     }

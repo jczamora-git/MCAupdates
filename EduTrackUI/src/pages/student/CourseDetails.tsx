@@ -297,7 +297,7 @@ const CourseDetails = () => {
       <div className="p-8 bg-gradient-to-b from-background to-muted/30 min-h-screen">
         <Button variant="ghost" onClick={() => navigate("/student/courses")} className="mb-6 hover:bg-muted">
           <ArrowLeft className="h-4 w-4 mr-2" />
-          Back to Courses
+          Back to Subjects
         </Button>
 
         <div className="grid gap-6">

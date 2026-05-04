@@ -118,6 +118,10 @@ const Students = () => {
   const [showEmailModal, setShowEmailModal] = useState(false);
   const [emailSuccess, setEmailSuccess] = useState(false);
 
+  const [resetRecipientMode, setResetRecipientMode] = useState<"registered" | "custom">("registered");
+  const [customResetEmail, setCustomResetEmail] = useState("");
+  const [isSendingReset, setIsSendingReset] = useState(false);
+
   const showAlert = (type: "success" | "error" | "info", message: string) => {
     setAlert({ type, message });
   };
@@ -208,6 +212,29 @@ const Students = () => {
     } catch (err: any) {
       console.error('Export error', err);
       showAlert('error', err?.message || 'Failed to export students');
+    }
+  };
+
+  const handleSendResetLink = async () => {
+    if (!selectedStudentId) return;
+    const targetEmail = resetRecipientMode === "registered" ? form.email : customResetEmail;
+    if (!targetEmail) return;
+    
+    setIsSendingReset(true);
+    try {
+      const res = await apiPost(`/api/students/${selectedStudentId}/send-password-reset-link`, {
+        recipient_mode: resetRecipientMode,
+        email: targetEmail,
+      });
+      if (res && res.success) {
+        showAlert('success', 'Password reset link sent.');
+      } else {
+        showAlert('error', res?.message || 'Failed to send password reset link');
+      }
+    } catch (err: any) {
+      showAlert('error', err?.message || 'Failed to send password reset link');
+    } finally {
+      setIsSendingReset(false);
     }
   };
 
@@ -733,6 +760,9 @@ const Students = () => {
       status: s.status,
       assignedCourses: s.assignedCourses,
     });
+    setResetRecipientMode("registered");
+    setCustomResetEmail("");
+    setIsSendingReset(false);
     setIsEditOpen(true);
     // fetch subjects that match this student's year level so suggestions match
     if (yearLevelId) fetchSubjects(yearLevelId);
@@ -1494,34 +1524,54 @@ const Students = () => {
                 </div>
               </div>
               <div>
-                <Label className="text-sm font-semibold">Parent/Guardian Contact (Optional)</Label>
-                <div className="grid grid-cols-2 gap-4 mt-2">
+                <Label className="text-sm font-semibold">Password Reset</Label>
+                <p className="text-xs text-muted-foreground mt-1">
+                  Send a password reset link to the student’s registered email, or use a custom email if the registered email is inaccessible.
+                </p>
+                <div className="grid grid-cols-2 gap-4 mt-3">
                   <div>
-                    <Label htmlFor="edit-parentName" className="text-xs">Name</Label>
-                    <Input
-                      id="edit-parentName"
-                      value={form.parentContact?.name || ""}
-                      onChange={(e) =>
-                        setForm((f) => ({
-                          ...f,
-                          parentContact: { name: e.target.value, phone: f.parentContact?.phone || "" },
-                        }))
-                      }
-                    />
+                    <Label className="text-xs">Recipient Source</Label>
+                    <Select value={resetRecipientMode} onValueChange={(v: "registered" | "custom") => setResetRecipientMode(v)}>
+                      <SelectTrigger className="mt-1 h-9">
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="registered">Registered Email</SelectItem>
+                        <SelectItem value="custom">Custom Email</SelectItem>
+                      </SelectContent>
+                    </Select>
                   </div>
-                  <div>
-                    <Label htmlFor="edit-parentPhone" className="text-xs">Phone</Label>
-                    <Input
-                      id="edit-parentPhone"
-                      value={form.parentContact?.phone || ""}
-                      onChange={(e) =>
-                        setForm((f) => ({
-                          ...f,
-                          parentContact: { name: f.parentContact?.name || "", phone: e.target.value },
-                        }))
-                      }
-                    />
+                  <div className="flex flex-col justify-end">
+                    {resetRecipientMode === "registered" ? (
+                      form.email ? (
+                        <div className="h-9 px-3 py-2 border rounded-md bg-muted/30 text-sm flex items-center overflow-hidden text-ellipsis whitespace-nowrap" title={form.email}>
+                          {form.email}
+                        </div>
+                      ) : (
+                        <div className="h-9 px-3 py-2 border rounded-md border-red-200 bg-red-50 text-xs text-red-600 flex items-center">
+                          No registered email found. Use a custom email instead.
+                        </div>
+                      )
+                    ) : (
+                      <Input
+                        value={customResetEmail}
+                        onChange={(e) => setCustomResetEmail(e.target.value)}
+                        placeholder="Enter alternate email address"
+                        className="h-9 mt-1"
+                        type="email"
+                      />
+                    )}
                   </div>
+                </div>
+                <div className="mt-3">
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={handleSendResetLink}
+                    disabled={isSendingReset || (resetRecipientMode === "registered" && !form.email) || (resetRecipientMode === "custom" && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(customResetEmail))}
+                  >
+                    {isSendingReset ? "Sending..." : "Send Reset Link"}
+                  </Button>
                 </div>
               </div>
               {/* Manage Subjects removed - student course assignment handled elsewhere or deprecated */}

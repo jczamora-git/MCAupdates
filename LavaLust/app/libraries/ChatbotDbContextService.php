@@ -33,9 +33,10 @@ class ChatbotDbContextService
      * @param  string       $message  The user's chat message
      * @param  string       $role     User role (admin|teacher|student|enrollee)
      * @param  int|null     $userId   Logged-in user ID
+     * @param  string|null  $intent   Optional intent name from router
      * @return string                 Multi-line context string (empty string if nothing relevant)
      */
-    public function build($message, $role, $userId)
+    public function build($message, $role, $userId, $intent = null)
     {
         $lines = [];
 
@@ -45,10 +46,35 @@ class ChatbotDbContextService
         $isPeriod     = $this->mentionsAcademicPeriod($message);
         $isTeacher    = $this->mentionsTeacher($message);
         $isSubject    = $this->mentionsSubjects($message);
+        $isGrades     = $this->mentionsGrades($message);
+        $isActivities = $this->mentionsActivities($message);
+        $isRfid       = $this->mentionsRfid($message);
+        $isConcerns   = $this->mentionsConcerns($message);
         $isNavigation = $this->mentionsNavigation($message);
         $isPinIssue   = $this->mentionsPinIssue($message);
         $yearLevel    = $this->extractYearLevel($message);
         $feeType      = $this->extractFeeType($message);
+
+        $intent = $intent ? mb_strtolower(trim((string) $intent)) : null;
+        if (!empty($intent)) {
+            $isFee = $isEnrollment = $isPayment = $isPeriod = $isTeacher = $isSubject = false;
+            $isGrades = $isActivities = $isRfid = $isConcerns = $isNavigation = $isPinIssue = false;
+
+            if (in_array($intent, ['student_enrollment_status', 'enrollment_status', 'admin_enrollment_summary'], true)) {
+                $isEnrollment = true;
+            } elseif (in_array($intent, ['student_payment_summary', 'payment_summary', 'admin_payment_summary'], true)) {
+                $isPayment = true;
+            } elseif (in_array($intent, ['student_subjects', 'student_teachers', 'teacher_subjects'], true)) {
+                $isSubject = true;
+                $isTeacher = true;
+            } elseif (in_array($intent, ['student_grades'], true)) {
+                $isGrades = true;
+            } elseif (in_array($intent, ['admin_rfid_summary'], true)) {
+                $isRfid = true;
+            } elseif (in_array($intent, ['admin_pending_concerns'], true)) {
+                $isConcerns = true;
+            }
+        }
 
         // Attach active academic period when any relevant topic is detected
         if ($isFee || $isEnrollment || $isPayment || $isPeriod || $isTeacher || $isSubject) {
@@ -93,57 +119,94 @@ class ChatbotDbContextService
             }
         }
 
-        // ── Student enrollment status ─────────────────────────────────────────
-        if ($isEnrollment && $userId && in_array($role, ['student', 'enrollee'])) {
-            $enrollment = $this->getStudentLatestEnrollment($userId);
-            if ($enrollment) {
-                $lines[] = "Your latest enrollment: grade level \"{$enrollment['grade_level']}\", status: {$enrollment['status']}, school year: {$enrollment['school_year']}";
-            } else {
-                $lines[] = "No enrollment record found for your account.";
-            }
-        }
-
-        // ── Student payment plan ──────────────────────────────────────────────
-        if ($isPayment && $userId && $role === 'student') {
-            $plan = $this->getStudentPaymentPlan($userId);
-            if ($plan) {
-                $lines[] = "Your payment plan ({$plan['school_year']}): schedule: {$plan['schedule_type']}, total tuition: ₱" . number_format($plan['total_tuition'], 2) . ", paid: ₱" . number_format($plan['total_paid'], 2) . ", remaining balance: ₱" . number_format($plan['balance'], 2) . ", status: {$plan['status']}";
-            }
-        }
-
-        // ── Teachers for this student ────────────────────────────────────────
-        if ($isTeacher && $userId && $role === 'student') {
-            $teacherData = $this->getStudentTeachers($userId);
-            if (!empty($teacherData['section'])) {
-                $lines[] = "Your class: {$teacherData['section']} ({$teacherData['year_level']})";
-            }
-            if (!empty($teacherData['class_teacher'])) {
-                $lines[] = "Your class teacher (adviser): {$teacherData['class_teacher']}";
-            }
-            if (!empty($teacherData['subject_teachers'])) {
-                $lines[] = "Your subject teachers:";
-                foreach ($teacherData['subject_teachers'] as $st) {
-                    $lines[] = "  • {$st['teacher_name']} – {$st['subject']}";
+        // ── Enrollment context (student/enrollee or admin summary) ────────────
+        if ($isEnrollment) {
+            if ($role === 'student' || $role === 'enrollee') {
+                if ($userId) {
+                    $block = $this->getStudentEnrollmentStatus($userId);
+                    if ($block !== '') {
+                        $lines[] = $block;
+                    }
                 }
-            }
-            if (empty($teacherData['class_teacher']) && empty($teacherData['subject_teachers'])) {
-                $lines[] = "No teacher assignments found for your grade level in the current school year.";
-            }
-        }
-
-        // ── Subjects for this student ─────────────────────────────────────
-        if ($isSubject && $userId && $role === 'student') {
-            $subjects = $this->getStudentSubjects($userId);
-            if (!empty($subjects['year_level'])) {
-                $lines[] = "Your grade level: {$subjects['year_level']}";
-            }
-            if (!empty($subjects['items'])) {
-                $lines[] = "Your subjects:";
-                foreach ($subjects['items'] as $sub) {
-                    $lines[] = "  • [{$sub['course_code']}] {$sub['name']}";
+            } elseif ($role === 'admin') {
+                $block = $this->getAdminEnrollmentSummary();
+                if ($block !== '') {
+                    $lines[] = $block;
                 }
             } else {
-                $lines[] = "No subjects found for your grade level.";
+                $lines[] = $this->buildAccessDeniedContext('enrollment_summary');
+            }
+        }
+
+        // ── Payment context (student or admin summary) ───────────────────────
+        if ($isPayment) {
+            if ($role === 'student') {
+                if ($userId) {
+                    $block = $this->getStudentPaymentSummary($userId);
+                    if ($block !== '') {
+                        $lines[] = $block;
+                    }
+                }
+            } elseif ($role === 'admin') {
+                $block = $this->getAdminPaymentSummary();
+                if ($block !== '') {
+                    $lines[] = $block;
+                }
+            } else {
+                $lines[] = $this->buildAccessDeniedContext('payment_summary');
+            }
+        }
+
+        // ── Subjects / teachers context ─────────────────────────────────────
+        if (($isTeacher || $isSubject) && $userId) {
+            if ($role === 'student') {
+                $block = $this->getStudentSubjectsWithTeachers($userId);
+                if ($block !== '') {
+                    $lines[] = $block;
+                }
+            } elseif ($role === 'teacher') {
+                $block = $this->getTeacherSubjects($userId);
+                if ($block !== '') {
+                    $lines[] = $block;
+                }
+            } else {
+                $lines[] = $this->buildAccessDeniedContext('subject_assignments');
+            }
+        }
+
+        // ── Student grades ──────────────────────────────────────────────────
+        if ($isGrades) {
+            if ($role === 'student' && $userId) {
+                $block = $this->getStudentGrades($userId);
+                if ($block !== '') {
+                    $lines[] = $block;
+                }
+            } else {
+                $lines[] = $this->buildAccessDeniedContext('student_grades');
+            }
+        }
+
+        // ── RFID attendance summary (admin only) ────────────────────────────
+        if ($isRfid) {
+            if ($role === 'admin') {
+                $block = $this->getAdminRfidSummary();
+                if ($block !== '') {
+                    $lines[] = $block;
+                }
+            } else {
+                $lines[] = $this->buildAccessDeniedContext('rfid_summary');
+            }
+        }
+
+        // ── Concerns summary (admin only) ───────────────────────────────────
+        if ($isConcerns) {
+            if ($role === 'admin') {
+                $block = $this->getAdminPendingConcernsSummary();
+                if ($block !== '') {
+                    $lines[] = $block;
+                }
+            } else {
+                $lines[] = $this->buildAccessDeniedContext('concern_summary');
             }
         }
 
@@ -277,6 +340,59 @@ class ChatbotDbContextService
         return false;
     }
 
+    private function mentionsGrades($msg)
+    {
+        $msg = mb_strtolower($msg);
+        foreach ([
+            // English
+            'grades', 'grade', 'score', 'rating', 'final grade', 'quarter', 'grading',
+            // Tagalog
+            'grado', 'marka', 'mark', 'rating', 'grade ko', 'grades ko', 'quarter',
+        ] as $kw) {
+            if (mb_strpos($msg, $kw) !== false) return true;
+        }
+        return false;
+    }
+
+    private function mentionsActivities($msg)
+    {
+        $msg = mb_strtolower($msg);
+        foreach ([
+            // English
+            'activity', 'activities', 'quiz', 'exam', 'assignment', 'due', 'overdue',
+            'late submission', 'take quiz', 'pending quiz',
+            // Tagalog
+            'gawain', 'aktibidad', 'pagsusulit', 'exam', 'assignment', 'deadline',
+        ] as $kw) {
+            if (mb_strpos($msg, $kw) !== false) return true;
+        }
+        return false;
+    }
+
+    private function mentionsRfid($msg)
+    {
+        $msg = mb_strtolower($msg);
+        foreach ([
+            'rfid', 'attendance', 'scan', 'tap card', 'time in', 'time out',
+            'late', 'absent', 'pumasok', 'attendance mode',
+        ] as $kw) {
+            if (mb_strpos($msg, $kw) !== false) return true;
+        }
+        return false;
+    }
+
+    private function mentionsConcerns($msg)
+    {
+        $msg = mb_strtolower($msg);
+        foreach ([
+            'concern', 'concerns', 'complaint', 'report', 'issue', 'problem',
+            'feedback', 'reklamo', 'sumbong', 'suport', 'help',
+        ] as $kw) {
+            if (mb_strpos($msg, $kw) !== false) return true;
+        }
+        return false;
+    }
+
     private function mentionsPinIssue($msg)
     {
         $msg = mb_strtolower($msg);
@@ -371,6 +487,67 @@ class ChatbotDbContextService
         }
 
         return null;
+    }
+
+    private function formatCurrency($value)
+    {
+        if ($value === null || $value === '') {
+            return 'N/A';
+        }
+        return '₱' . number_format((float) $value, 2);
+    }
+
+    private function buildAccessDeniedContext($intent)
+    {
+        return $this->formatContextBlock($intent, [
+            'Result' => 'I cannot access that information for your role.'
+        ]);
+    }
+
+    private function formatContextBlock($intent, array $fields)
+    {
+        $lines = [
+            'Live Context:',
+            '- Intent: ' . $intent,
+        ];
+
+        foreach ($fields as $label => $value) {
+            $lines[] = '- ' . $label . ': ' . $value;
+        }
+
+        return implode("\n", $lines);
+    }
+
+    private function getStudentRecordByUserId($userId)
+    {
+        try {
+            $stmt = $this->db->raw(
+                "SELECT s.id, s.year_level, s.section_id, sec.name as section_name, u.first_name, u.last_name\n"
+                . "FROM students s\n"
+                . "LEFT JOIN sections sec ON s.section_id = sec.id\n"
+                . "LEFT JOIN users u ON s.user_id = u.id\n"
+                . "WHERE s.user_id = ? LIMIT 1",
+                [$userId]
+            );
+            return $stmt->fetch(PDO::FETCH_ASSOC) ?: null;
+        } catch (Exception $e) {
+            error_log('ChatbotDbContextService::getStudentRecordByUserId error: ' . $e->getMessage());
+            return null;
+        }
+    }
+
+    private function getTeacherRecordByUserId($userId)
+    {
+        try {
+            $stmt = $this->db->raw(
+                "SELECT id, employee_id FROM teachers WHERE user_id = ? LIMIT 1",
+                [$userId]
+            );
+            return $stmt->fetch(PDO::FETCH_ASSOC) ?: null;
+        } catch (Exception $e) {
+            error_log('ChatbotDbContextService::getTeacherRecordByUserId error: ' . $e->getMessage());
+            return null;
+        }
     }
 
     // ── DB queries ────────────────────────────────────────────────────────────
@@ -559,6 +736,441 @@ class ChatbotDbContextService
             error_log('ChatbotDbContextService::getStudentSubjects error: ' . $e->getMessage());
         }
         return $result;
+    }
+
+    private function getStudentSubjectsWithTeachers($userId)
+    {
+        $student = $this->getStudentRecordByUserId($userId);
+        if (!$student || empty($student['year_level'])) {
+            return $this->formatContextBlock('student_subjects', [
+                'Result' => 'No student profile found for this account.'
+            ]);
+        }
+
+        $subjects = $this->getStudentSubjects($userId);
+        $teachers = $this->getStudentTeachers($userId);
+        $teacherMap = [];
+        if (!empty($teachers['subject_teachers'])) {
+            foreach ($teachers['subject_teachers'] as $row) {
+                $subjectName = trim((string)($row['subject'] ?? ''));
+                $teacherName = trim((string)($row['teacher_name'] ?? ''));
+                if ($subjectName === '' || $teacherName === '') {
+                    continue;
+                }
+                if (!isset($teacherMap[$subjectName])) {
+                    $teacherMap[$subjectName] = [];
+                }
+                $teacherMap[$subjectName][] = $teacherName;
+            }
+        }
+
+        $lines = [
+            'Grade Level' => $student['year_level'],
+        ];
+        if (!empty($student['section_name'])) {
+            $lines['Section'] = $student['section_name'];
+        }
+        if (!empty($teachers['class_teacher'])) {
+            $lines['Class Adviser'] = $teachers['class_teacher'];
+        }
+
+        if (!empty($subjects['items'])) {
+            $subjectLines = [];
+            foreach ($subjects['items'] as $sub) {
+                $code = $sub['course_code'] ?? '';
+                $name = $sub['name'] ?? '';
+                if ($name === '' && $code === '') {
+                    continue;
+                }
+                $label = trim(($code !== '' ? '[' . $code . '] ' : '') . $name);
+                $teacherList = $teacherMap[$name] ?? [];
+                $teacherLabel = '';
+                if (!empty($teacherList)) {
+                    $teacherLabel = ' (Teacher: ' . implode(', ', array_unique($teacherList)) . ')';
+                }
+                $subjectLines[] = $label . $teacherLabel;
+                if (count($subjectLines) >= 12) {
+                    break;
+                }
+            }
+            $lines['Subjects'] = "\n  • " . implode("\n  • ", $subjectLines);
+        } else {
+            $lines['Result'] = 'No subjects found for your grade level.';
+        }
+
+        return $this->formatContextBlock('student_subjects', $lines);
+    }
+
+    private function getStudentEnrollmentStatus($userId)
+    {
+        try {
+            $sql = "SELECT e.id, e.grade_level, e.status, e.submitted_date, e.created_at, ap.school_year, ap.quarter\n"
+                 . "FROM enrollments e\n"
+                 . "LEFT JOIN academic_periods ap ON e.academic_period_id = ap.id\n"
+                 . "WHERE e.created_user_id = ?\n"
+                 . "ORDER BY COALESCE(e.submitted_date, e.created_at) DESC\n"
+                 . "LIMIT 1";
+            $stmt = $this->db->raw($sql, [$userId]);
+            $row = $stmt->fetch(PDO::FETCH_ASSOC);
+
+            if (!$row) {
+                return $this->formatContextBlock('student_enrollment_status', [
+                    'Result' => 'No enrollment record found for your account.'
+                ]);
+            }
+
+            $status = $row['status'] ?? 'Unknown';
+            $nextStep = 'Check your enrollment details in [link:My Enrollments|/enrollment/my-enrollments].';
+            $normalizedStatus = strtolower((string)$status);
+            if (in_array($normalizedStatus, ['pending', 'under review', 'review'], true)) {
+                $nextStep = 'Your application is under review. Please wait for admin review or check [link:My Enrollments|/enrollment/my-enrollments].';
+            } elseif (in_array($normalizedStatus, ['approved', 'accepted'], true)) {
+                $nextStep = 'Your enrollment is approved. Proceed to [link:My Payment|/enrollment/payment] if payment is required.';
+            } elseif (in_array($normalizedStatus, ['rejected', 'declined'], true)) {
+                $nextStep = 'Your enrollment was rejected. Review details in [link:My Enrollments|/enrollment/my-enrollments] or contact admin.';
+            }
+
+            return $this->formatContextBlock('student_enrollment_status', [
+                'Enrollment ID' => $row['id'] ?? 'N/A',
+                'Status' => $status,
+                'Grade Level' => $row['grade_level'] ?? 'N/A',
+                'School Year' => $row['school_year'] ?? 'N/A',
+                'Quarter' => $row['quarter'] ?? 'N/A',
+                'Submitted' => $row['submitted_date'] ?? $row['created_at'] ?? 'N/A',
+                'Next Step' => $nextStep,
+            ]);
+        } catch (Exception $e) {
+            error_log('ChatbotDbContextService::getStudentEnrollmentStatus error: ' . $e->getMessage());
+            return '';
+        }
+    }
+
+    private function getStudentPaymentSummary($userId)
+    {
+        try {
+            $planSql = "SELECT pp.schedule_type, pp.total_tuition, pp.total_paid, pp.balance, pp.status, ap.school_year\n"
+                     . "FROM payment_plans pp\n"
+                     . "LEFT JOIN academic_periods ap ON pp.academic_period_id = ap.id\n"
+                     . "WHERE pp.student_id = ?\n"
+                     . "ORDER BY pp.created_at DESC\n"
+                     . "LIMIT 1";
+            $planStmt = $this->db->raw($planSql, [$userId]);
+            $plan = $planStmt->fetch(PDO::FETCH_ASSOC);
+
+            $paymentSql = "SELECT amount, status, payment_date, created_at\n"
+                        . "FROM payments\n"
+                        . "WHERE student_id = ?\n"
+                        . "ORDER BY COALESCE(payment_date, created_at) DESC\n"
+                        . "LIMIT 1";
+            $paymentStmt = $this->db->raw($paymentSql, [$userId]);
+            $latest = $paymentStmt->fetch(PDO::FETCH_ASSOC);
+
+            $lines = [];
+            if ($plan) {
+                $lines['Payment Plan'] = ($plan['schedule_type'] ?? 'Plan') . ' (' . ($plan['status'] ?? 'Unknown') . ')';
+                $lines['School Year'] = $plan['school_year'] ?? 'N/A';
+                $lines['Total Required'] = $this->formatCurrency($plan['total_tuition'] ?? null);
+                $lines['Total Paid'] = $this->formatCurrency($plan['total_paid'] ?? null);
+                $lines['Balance'] = $this->formatCurrency($plan['balance'] ?? null);
+            } else {
+                $sumStmt = $this->db->raw(
+                    "SELECT SUM(amount) as total_paid FROM payments WHERE student_id = ? AND status = 'Approved'",
+                    [$userId]
+                );
+                $sumRow = $sumStmt->fetch(PDO::FETCH_ASSOC);
+                $lines['Total Paid'] = $this->formatCurrency($sumRow['total_paid'] ?? null);
+                $lines['Total Required'] = 'N/A';
+                $lines['Balance'] = 'N/A';
+            }
+
+            if ($latest) {
+                $latestLabel = $this->formatCurrency($latest['amount'] ?? null);
+                $date = $latest['payment_date'] ?? $latest['created_at'] ?? null;
+                $latestLabel .= $date ? ' on ' . $date : '';
+                if (!empty($latest['status'])) {
+                    $latestLabel .= ' (Status: ' . $latest['status'] . ')';
+                }
+                $lines['Latest Payment'] = $latestLabel;
+            } else {
+                $lines['Latest Payment'] = 'No payment records found.';
+            }
+
+            return $this->formatContextBlock('student_payment_summary', $lines);
+        } catch (Exception $e) {
+            error_log('ChatbotDbContextService::getStudentPaymentSummary error: ' . $e->getMessage());
+            return '';
+        }
+    }
+
+    private function getStudentGrades($userId)
+    {
+        $student = $this->getStudentRecordByUserId($userId);
+        if (!$student || empty($student['id'])) {
+            return $this->formatContextBlock('student_grades', [
+                'Result' => 'No student profile found for this account.'
+            ]);
+        }
+
+        try {
+            $sql = "SELECT fgi.final_grade_num, fgi.final_grade, fgi.remarks, fgs.quarter, fgs.status, ap.school_year,\n"
+                 . "       sub.course_code, sub.name as subject_name\n"
+                 . "FROM final_grade_submission_items fgi\n"
+                 . "JOIN final_grade_submissions fgs ON fgs.id = fgi.submission_id\n"
+                 . "LEFT JOIN academic_periods ap ON fgs.academic_period_id = ap.id\n"
+                 . "LEFT JOIN subjects sub ON fgs.subject_id = sub.id\n"
+                 . "WHERE fgi.student_id = ?\n"
+                 . "ORDER BY fgi.created_at DESC\n"
+                 . "LIMIT 12";
+            $stmt = $this->db->raw($sql, [$student['id']]);
+            $rows = $stmt->fetchAll(PDO::FETCH_ASSOC) ?: [];
+
+            if (empty($rows)) {
+                return $this->formatContextBlock('student_grades', [
+                    'Result' => 'No grade records are available yet.'
+                ]);
+            }
+
+            $entries = [];
+            foreach ($rows as $row) {
+                $subject = trim((string)($row['subject_name'] ?? ''));
+                $code = trim((string)($row['course_code'] ?? ''));
+                $label = trim(($code !== '' ? '[' . $code . '] ' : '') . $subject);
+                $grade = $row['final_grade'] ?? $row['final_grade_num'] ?? 'N/A';
+                $quarter = $row['quarter'] ?? 'N/A';
+                $year = $row['school_year'] ?? 'N/A';
+                $entries[] = $label . ' — ' . $grade . ' (Quarter: ' . $quarter . ', SY: ' . $year . ')';
+                if (count($entries) >= 12) {
+                    break;
+                }
+            }
+
+            return $this->formatContextBlock('student_grades', [
+                'Grades' => "\n  • " . implode("\n  • ", $entries)
+            ]);
+        } catch (Exception $e) {
+            error_log('ChatbotDbContextService::getStudentGrades error: ' . $e->getMessage());
+            return '';
+        }
+    }
+
+    private function getTeacherSubjects($userId)
+    {
+        $teacher = $this->getTeacherRecordByUserId($userId);
+        if (!$teacher || empty($teacher['id'])) {
+            return $this->formatContextBlock('teacher_subjects', [
+                'Result' => 'No teacher profile found for this account.'
+            ]);
+        }
+
+        try {
+            $periodStmt = $this->db->raw("SELECT school_year FROM academic_periods WHERE status = 'active' LIMIT 1");
+            $period = $periodStmt->fetch(PDO::FETCH_ASSOC);
+            $schoolYear = $period['school_year'] ?? null;
+
+            $sql = "SELECT s.course_code, s.name as subject_name, s.level, sec.name as section_name\n"
+                 . "FROM teacher_subject_assignments tsa\n"
+                 . "JOIN subjects s ON tsa.subject_id = s.id\n"
+                 . "LEFT JOIN year_levels yl ON yl.name COLLATE utf8mb4_unicode_ci = s.level COLLATE utf8mb4_unicode_ci\n"
+                 . "LEFT JOIN year_level_sections yls ON yls.year_level_id = yl.id\n"
+                 . "LEFT JOIN sections sec ON sec.id = yls.section_id\n"
+                 . "WHERE tsa.teacher_id = ?";
+            $params = [$teacher['id']];
+
+            if (!empty($schoolYear)) {
+                $sql .= " AND tsa.school_year = ?";
+                $params[] = $schoolYear;
+            }
+
+            $sql .= " ORDER BY s.course_code ASC";
+
+            $stmt = $this->db->raw($sql, $params);
+            $rows = $stmt->fetchAll(PDO::FETCH_ASSOC) ?: [];
+
+            if (empty($rows)) {
+                return $this->formatContextBlock('teacher_subjects', [
+                    'Result' => 'No subject assignments found for this teacher.'
+                ]);
+            }
+
+            $entries = [];
+            foreach ($rows as $row) {
+                $label = trim((string)($row['subject_name'] ?? ''));
+                $code = trim((string)($row['course_code'] ?? ''));
+                $level = trim((string)($row['level'] ?? ''));
+                $section = trim((string)($row['section_name'] ?? ''));
+                $line = ($code !== '' ? '[' . $code . '] ' : '') . $label;
+                if ($level !== '') {
+                    $line .= ' (' . $level . ')';
+                }
+                if ($section !== '') {
+                    $line .= ' — Section ' . $section;
+                }
+                $entries[] = $line;
+                if (count($entries) >= 12) {
+                    break;
+                }
+            }
+
+            return $this->formatContextBlock('teacher_subjects', [
+                'Subjects' => "\n  • " . implode("\n  • ", $entries)
+            ]);
+        } catch (Exception $e) {
+            error_log('ChatbotDbContextService::getTeacherSubjects error: ' . $e->getMessage());
+            return '';
+        }
+    }
+
+    private function getAdminEnrollmentSummary()
+    {
+        try {
+            $periodStmt = $this->db->raw("SELECT id, school_year, quarter FROM academic_periods WHERE status = 'active' LIMIT 1");
+            $period = $periodStmt->fetch(PDO::FETCH_ASSOC);
+            if (!$period || empty($period['id'])) {
+                return $this->formatContextBlock('admin_enrollment_summary', [
+                    'Result' => 'No active academic period found.'
+                ]);
+            }
+
+            $stmt = $this->db->raw(
+                "SELECT status, COUNT(*) as total FROM enrollments WHERE academic_period_id = ? GROUP BY status",
+                [$period['id']]
+            );
+            $rows = $stmt->fetchAll(PDO::FETCH_ASSOC) ?: [];
+            if (empty($rows)) {
+                return $this->formatContextBlock('admin_enrollment_summary', [
+                    'Result' => 'No enrollments found for the current academic period.'
+                ]);
+            }
+
+            $summary = [];
+            $total = 0;
+            foreach ($rows as $row) {
+                $status = $row['status'] ?? 'Unknown';
+                $count = (int)($row['total'] ?? 0);
+                $summary[] = $status . ': ' . $count;
+                $total += $count;
+            }
+
+            return $this->formatContextBlock('admin_enrollment_summary', [
+                'School Year' => $period['school_year'] ?? 'N/A',
+                'Quarter' => $period['quarter'] ?? 'N/A',
+                'Total Enrollments' => $total,
+                'By Status' => "\n  • " . implode("\n  • ", $summary),
+            ]);
+        } catch (Exception $e) {
+            error_log('ChatbotDbContextService::getAdminEnrollmentSummary error: ' . $e->getMessage());
+            return '';
+        }
+    }
+
+    private function getAdminPaymentSummary()
+    {
+        try {
+            $today = date('Y-m-d');
+            $stmt = $this->db->raw(
+                "SELECT status, COUNT(*) as total, SUM(amount) as total_amount\n"
+                . "FROM payments\n"
+                . "WHERE DATE(COALESCE(payment_date, created_at)) = ?\n"
+                . "GROUP BY status",
+                [$today]
+            );
+            $rows = $stmt->fetchAll(PDO::FETCH_ASSOC) ?: [];
+
+            $summary = [];
+            $totalPayments = 0;
+            $totalAmount = 0.0;
+            foreach ($rows as $row) {
+                $status = $row['status'] ?? 'Unknown';
+                $count = (int)($row['total'] ?? 0);
+                $amount = (float)($row['total_amount'] ?? 0);
+                $summary[] = $status . ': ' . $count . ' (' . $this->formatCurrency($amount) . ')';
+                $totalPayments += $count;
+                $totalAmount += $amount;
+            }
+
+            if (empty($summary)) {
+                return $this->formatContextBlock('admin_payment_summary', [
+                    'Result' => 'No payments recorded for today.'
+                ]);
+            }
+
+            return $this->formatContextBlock('admin_payment_summary', [
+                'Date' => $today,
+                'Total Payments' => $totalPayments,
+                'Total Amount' => $this->formatCurrency($totalAmount),
+                'By Status' => "\n  • " . implode("\n  • ", $summary),
+            ]);
+        } catch (Exception $e) {
+            error_log('ChatbotDbContextService::getAdminPaymentSummary error: ' . $e->getMessage());
+            return '';
+        }
+    }
+
+    private function getAdminRfidSummary()
+    {
+        try {
+            $today = date('Y-m-d');
+            $registeredStmt = $this->db->raw(
+                "SELECT COUNT(*) as total FROM students WHERE rfid_card IS NOT NULL AND TRIM(rfid_card) != ''",
+                []
+            );
+            $registeredRow = $registeredStmt->fetch(PDO::FETCH_ASSOC);
+
+            $scanStmt = $this->db->raw(
+                "SELECT COUNT(*) as total FROM rfid_scans WHERE scan_time >= ? AND scan_time <= ?",
+                [$today . ' 00:00:00', $today . ' 23:59:59']
+            );
+            $scanRow = $scanStmt->fetch(PDO::FETCH_ASSOC);
+
+            $totalScanStmt = $this->db->raw(
+                "SELECT COUNT(*) as total FROM rfid_scans",
+                []
+            );
+            $totalScanRow = $totalScanStmt->fetch(PDO::FETCH_ASSOC);
+
+            return $this->formatContextBlock('admin_rfid_summary', [
+                'Date' => $today,
+                'Registered Cards' => (int)($registeredRow['total'] ?? 0),
+                'RFID Scans Today' => (int)($scanRow['total'] ?? 0),
+                'Total RFID Scans' => (int)($totalScanRow['total'] ?? 0),
+            ]);
+        } catch (Exception $e) {
+            error_log('ChatbotDbContextService::getAdminRfidSummary error: ' . $e->getMessage());
+            return '';
+        }
+    }
+
+    private function getAdminPendingConcernsSummary()
+    {
+        try {
+            $stmt = $this->db->raw(
+                "SELECT status, COUNT(*) as total FROM concern_tickets GROUP BY status",
+                []
+            );
+            $rows = $stmt->fetchAll(PDO::FETCH_ASSOC) ?: [];
+            if (empty($rows)) {
+                return $this->formatContextBlock('admin_pending_concerns', [
+                    'Result' => 'No concerns found.'
+                ]);
+            }
+
+            $summary = [];
+            $total = 0;
+            foreach ($rows as $row) {
+                $status = $row['status'] ?? 'Unknown';
+                $count = (int)($row['total'] ?? 0);
+                $summary[] = $status . ': ' . $count;
+                $total += $count;
+            }
+
+            return $this->formatContextBlock('admin_pending_concerns', [
+                'Total Tickets' => $total,
+                'By Status' => "\n  • " . implode("\n  • ", $summary),
+            ]);
+        } catch (Exception $e) {
+            error_log('ChatbotDbContextService::getAdminPendingConcernsSummary error: ' . $e->getMessage());
+            return '';
+        }
     }
 
     private function getStudentLatestEnrollment($userId)

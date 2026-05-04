@@ -188,6 +188,12 @@ class ChatbotRouteRegistry
                 'roles'       => ['admin'],
             ],
             [
+                'route'       => '/admin/reports',
+                'label'       => 'Reports',
+                'description' => 'Generate and download reports and PDF exports',
+                'roles'       => ['admin'],
+            ],
+            [
                 'route'       => '/admin/pdf',
                 'label'       => 'PDF / Grade Reports',
                 'description' => 'Generate and download PDF grade reports',
@@ -290,6 +296,12 @@ class ChatbotRouteRegistry
                 'route'       => '/teacher/messages',
                 'label'       => 'Messages (Teacher)',
                 'description' => 'Send and receive messages with students and admins',
+                'roles'       => ['teacher'],
+            ],
+            [
+                'route'       => '/teacher/announcements',
+                'label'       => 'Announcements (Teacher)',
+                'description' => 'View and post class announcements',
                 'roles'       => ['teacher'],
             ],
             [
@@ -432,9 +444,21 @@ class ChatbotRouteRegistry
                 'roles'       => ['enrollee'],
             ],
             [
+                'route'       => '/enrollee/new',
+                'label'       => 'Enroll Now (Enrollee)',
+                'description' => 'Start a new enrollment application (legacy enrollee link)',
+                'roles'       => ['enrollee'],
+            ],
+            [
                 'route'       => '/enrollee/enrollment',
                 'label'       => 'My Enrollment',
                 'description' => 'View and manage your current enrollment application',
+                'roles'       => ['enrollee'],
+            ],
+            [
+                'route'       => '/enrollee/my-enrollments',
+                'label'       => 'My Enrollments (Enrollee)',
+                'description' => 'View the status of your enrollment applications',
                 'roles'       => ['enrollee'],
             ],
             [
@@ -449,6 +473,19 @@ class ChatbotRouteRegistry
                 'description' => 'Submit payment for your enrollment fees',
                 'roles'       => ['enrollee'],
             ],
+            [
+                'route'       => '/enrollee/setup-pin',
+                'label'       => 'Set Up Payment PIN (Enrollee)',
+                'description' => 'Create a new payment PIN for secure transactions',
+                'roles'       => ['enrollee'],
+            ],
+            [
+                'route'       => '/enrollee/verify-pin',
+                'label'       => 'Verify Payment PIN (Enrollee)',
+                'description' => 'Enter your payment PIN to authorize a transaction',
+                'roles'       => ['enrollee'],
+            ],
         ];
     }
 }
+// test if gagana, try nga ulit

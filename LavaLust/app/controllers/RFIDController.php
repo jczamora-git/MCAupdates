@@ -11,6 +11,7 @@ class RFIDController extends Controller
         $this->call->model('RFIDScanModel');
         $this->call->model('StudentModel');
         $this->call->library('session');
+        $this->call->library('SmsService');
     }
 
     private function require_admin()
@@ -276,47 +277,20 @@ class RFIDController extends Controller
             $now = app_now();
 
             $session = $this->RFIDSessionModel->get_active($scanType);
-            if (!$session) {
-                $endedStmt = $this->db->raw(
-                    "SELECT id FROM rfid_sessions\n"
-                    . "WHERE session_type = ?\n"
-                    . "  AND scheduled_end <= ?\n"
-                    . "  AND status IN ('completed', 'closed')\n"
-                    . "ORDER BY scheduled_end DESC\n"
-                    . "LIMIT 1",
-                    [$scanType, $now]
-                );
-                $endedRow = $endedStmt->fetch(PDO::FETCH_ASSOC);
-
-                http_response_code(400);
-                echo json_encode([
-                    'success' => false,
-                    'message' => $endedRow
-                        ? 'The active session has ended. Please start the next session.'
-                        : 'No active RFID session. Please start a session first.'
-                ]);
-                return;
-            }
-
             $student = $this->StudentModel->get_by_rfid_card($rfidCode);
             $status = $student ? 'success' : 'unknown';
             $notes = null;
             $isLate = 0;
             $sessionId = null;
 
-            $sessionId = $session['id'];
-            if (!empty($session['scheduled_end']) && $now >= $session['scheduled_end']) {
-                $this->auto_close_expired_sessions();
-                http_response_code(400);
-                echo json_encode([
-                    'success' => false,
-                    'message' => 'The active session has ended. Please start the next session.'
-                ]);
-                return;
-            }
-
-            if ($now > $session['scheduled_end']) {
+            if ($session) {
+                $sessionId = $session['id'];
+                if (!empty($session['scheduled_end']) && $now > $session['scheduled_end']) {
+                    $isLate = 1;
+                }
+            } else {
                 $isLate = 1;
+                $notes = 'No active session';
             }
 
             if ($sessionId) {
@@ -361,6 +335,15 @@ class RFIDController extends Controller
                 return;
             }
 
+            $smsResult = $this->send_attendance_sms(
+                $student,
+                $scanType,
+                $now,
+                $session,
+                $isLate,
+                empty($session)
+            );
+
             echo json_encode([
                 'success' => true,
                 'data' => [
@@ -373,7 +356,10 @@ class RFIDController extends Controller
                     'notes' => $notes,
                     'is_late' => $isLate,
                     'image_path' => $imagePath,
-                    'session_id' => $sessionId
+                    'session_id' => $sessionId,
+                    'sms_sent' => $smsResult['sent'],
+                    'sms_status' => $smsResult['status'],
+                    'sms_message' => $smsResult['message']
                 ]
             ]);
         } catch (Exception $e) {
@@ -767,5 +753,69 @@ class RFIDController extends Controller
         }
 
         return '/' . $relativeDir . '/' . $filename;
+    }
+
+    private function send_attendance_sms($student, $scanType, $scanTime, $session, $isLate, $noActiveSession = false)
+    {
+        if (empty($student)) {
+            return ['sent' => false, 'status' => 'skipped', 'message' => 'Unknown RFID; SMS skipped.'];
+        }
+
+        $phone = trim((string) ($student['phone'] ?? ''));
+        if ($phone === '') {
+            return ['sent' => false, 'status' => 'skipped', 'message' => 'No phone number; SMS skipped.'];
+        }
+
+        $studentName = $this->format_student_name($student);
+        $timeLabel = $this->format_scan_time($scanTime);
+        $sessionLabel = $session['label'] ?? 'N/A';
+
+        if ($noActiveSession) {
+            $message = "MCA Attendance: {$studentName} was marked late at {$timeLabel}. No active session was found.";
+        } elseif (!empty($isLate)) {
+            $message = "MCA Attendance: {$studentName} was marked late at {$timeLabel}. Session: {$sessionLabel}.";
+        } elseif ($scanType === 'entry') {
+            $message = "MCA Attendance: {$studentName} entered school at {$timeLabel}. Session: {$sessionLabel}.";
+        } elseif ($scanType === 'exit') {
+            $message = "MCA Attendance: {$studentName} exited school at {$timeLabel}. Session: {$sessionLabel}.";
+        } else {
+            $message = "MCA Attendance: {$studentName} was scanned at {$timeLabel}. Session: {$sessionLabel}.";
+        }
+
+        $result = $this->SmsService->send($phone, $message);
+        if (!empty($result['success'])) {
+            return ['sent' => true, 'status' => 'sent', 'message' => 'SMS sent.'];
+        }
+
+        $failureMessage = !empty($result['message'])
+            ? (string) $result['message']
+            : 'SMS failed but scan was recorded.';
+
+        return ['sent' => false, 'status' => 'failed', 'message' => $failureMessage];
+    }
+
+    private function format_student_name($student)
+    {
+        $parts = [
+            trim((string) ($student['first_name'] ?? '')),
+            trim((string) ($student['middle_name'] ?? '')),
+            trim((string) ($student['last_name'] ?? ''))
+        ];
+
+        $parts = array_values(array_filter($parts, function ($value) {
+            return $value !== '';
+        }));
+
+        return count($parts) ? implode(' ', $parts) : 'Student';
+    }
+
+    private function format_scan_time($scanTime)
+    {
+        $timestamp = strtotime($scanTime);
+        if ($timestamp === false) {
+            return $scanTime;
+        }
+
+        return date('g:i A', $timestamp);
     }
 }

@@ -151,6 +151,7 @@ class AnnouncementModel extends Model
         $where_clauses = ['a.status != \'archived\''];
         $params = [];
         $now = app_now();
+        $needsUserJoin = !empty($filters['created_by_role']);
 
         $includeExpired = !empty($filters['include_expired']);
         if (!$includeExpired) {
@@ -169,6 +170,11 @@ class AnnouncementModel extends Model
         if (!empty($filters['created_by'])) {
             $where_clauses[] = 'a.created_by = ?';
             $params[] = $filters['created_by'];
+        }
+        if (!empty($filters['created_by_role'])) {
+            $where_clauses[] = 'u.role = ?';
+            $params[] = $filters['created_by_role'];
+            $needsUserJoin = true;
         }
         if (!empty($filters['status'])) {
             $where_clauses[] = 'a.status = ?';
@@ -203,6 +209,7 @@ class AnnouncementModel extends Model
         }
 
         $where_sql = count($where_clauses) ? 'WHERE ' . implode(' AND ', $where_clauses) : '';
+        $userJoin = $needsUserJoin ? 'LEFT JOIN users u ON u.id = a.created_by' : '';
 
         if ($user_id) {
             $sql = "
@@ -212,6 +219,7 @@ class AnnouncementModel extends Model
                        CASE WHEN ar.id IS NOT NULL THEN 1 ELSE 0 END AS is_read,
                        ar.read_at
                 FROM announcements a
+                $userJoin
                 LEFT JOIN announcement_reads ar ON ar.announcement_id = a.id AND ar.user_id = ?
                 $where_sql
                 ORDER BY a.published_at DESC
@@ -224,6 +232,7 @@ class AnnouncementModel extends Model
                        a.metadata, a.created_at, a.updated_at,
                        0 AS is_read, NULL AS read_at
                 FROM announcements a
+                $userJoin
                 $where_sql
                 ORDER BY a.published_at DESC
             ";
@@ -247,4 +256,33 @@ class AnnouncementModel extends Model
         $stmt = $this->db->raw($sql, [$announcement_id, $user_id, $now, $now]);
         return $stmt !== false;
     }
+
+    /**
+     * Automatically archive expired active announcements.
+     * Announcement is expired if:
+     * - status = 'active'
+     * - ends_at is not null
+     * - ends_at < current datetime
+     *
+     * @return int Number of announcements archived
+     */
+    public function auto_archive_expired()
+{
+    $now = app_now();
+
+    try {
+        $sql = "UPDATE {$this->table}
+                SET status = ?, updated_at = ?
+                WHERE status = ?
+                  AND ends_at IS NOT NULL
+                  AND ends_at < ?";
+
+        $this->db->query($sql, ['archived', $now, 'active', $now]);
+
+        return 0;
+    } catch (Throwable $e) {
+        error_log('Failed to auto-archive announcements: ' . $e->getMessage());
+        return 0;
+    }
+}
 }

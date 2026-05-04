@@ -38,6 +38,24 @@ const parseMetadata = (value: any): any | null => {
   return null;
 };
 
+const getEffectiveDisplayStatus = (announcement: any): string => {
+  // If already archived, show as archived
+  if (announcement.status === 'archived') {
+    return 'archived';
+  }
+
+  // Safety fallback: if active but ends_at is in the past, display as archived
+  if (announcement.status === 'active' && announcement.ends_at) {
+    const endsAtTime = new Date(announcement.ends_at).getTime();
+    const nowTime = new Date().getTime();
+    if (endsAtTime < nowTime) {
+      return 'archived';
+    }
+  }
+
+  return announcement.status || 'draft';
+};
+
 const toClassKey = (subjectId: string | number, sectionId: string | number) => `${String(subjectId)}:${String(sectionId)}`;
 
 const Announcements = () => {
@@ -91,11 +109,9 @@ const Announcements = () => {
   const [editSelectedClassKey, setEditSelectedClassKey] = useState("");
 
   const adminAudienceOptions = [
-    { value: "all", label: "All Users" },
+    { value: "all", label: "All" },
     { value: "students", label: "Students Only" },
-    { value: "teachers", label: "Teachers Only" },
-    { value: "parents", label: "Parents Only" },
-    { value: "staff", label: "Staff Only" }
+    { value: "teachers", label: "Teachers Only" }
   ];
 
   const teacherAudienceOptions = [
@@ -203,8 +219,23 @@ const Announcements = () => {
       try {
         const res = await apiGet(`${API_ENDPOINTS.ANNOUNCEMENTS}?include_expired=1`);
         // Expecting res.data or res.announcements or array directly
-        const list = res.data ?? res.announcements ?? res ?? [];
+        let list = res.data ?? res.announcements ?? res ?? [];
         if (Array.isArray(list) && mounted) {
+          // Frontend safeguard: for admin, filter out teacher-created announcements
+          if (isAdmin) {
+            list = list.filter((ann: any) => {
+              // Hide teacher-created announcements
+              if (ann.creator_role === 'teacher' || ann.created_by_role === 'teacher') {
+                return false;
+              }
+              // Hide class-targeted announcements (metadata.scope = class)
+              const meta = parseMetadata(ann.metadata);
+              if (meta?.scope === 'class') {
+                return false;
+              }
+              return true;
+            });
+          }
           setAnnouncements(list);
         }
       } catch (e) {
@@ -215,7 +246,7 @@ const Announcements = () => {
     };
     fetchAnnouncements();
     return () => { mounted = false; };
-  }, []);
+  }, [isAdmin]);
 
   return (
     <DashboardLayout>
@@ -453,9 +484,9 @@ const Announcements = () => {
                           </td>
                           <td className="px-6 py-4 whitespace-nowrap">
                             <Badge
-                              variant={announcement.status === "active" ? "default" : "outline"}
+                              variant={getEffectiveDisplayStatus(announcement) === "active" ? "default" : "outline"}
                             >
-                              {announcement.status}
+                              {getEffectiveDisplayStatus(announcement)}
                             </Badge>
                           </td>
                           <td className="px-6 py-4 whitespace-nowrap">

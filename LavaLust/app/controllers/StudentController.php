@@ -1433,6 +1433,109 @@ class StudentController extends Controller
     }
 
     /**
+     * Send a password reset link to the student's email
+     * POST /api/students/{id}/send-password-reset-link
+     */
+    public function api_send_password_reset_link($id = null)
+    {
+        api_set_json_headers();
+
+        if (!$this->require_admin()) {
+            return;
+        }
+
+        if (!$id) {
+            http_response_code(400);
+            echo json_encode(['success' => false, 'message' => 'Student ID is required']);
+            return;
+        }
+
+        try {
+            $input = json_decode(file_get_contents('php://input'), true);
+            $recipientMode = $input['recipient_mode'] ?? 'registered';
+            $customEmail = $input['email'] ?? '';
+
+            $student = $this->StudentModel->get_student($id);
+            if (!$student) {
+                http_response_code(404);
+                echo json_encode(['success' => false, 'message' => 'Student not found']);
+                return;
+            }
+
+            $userId = $student['user_id'] ?? null;
+            if (!$userId) {
+                http_response_code(404);
+                echo json_encode(['success' => false, 'message' => 'Student user account not found.']);
+                return;
+            }
+
+            $email = '';
+            if ($recipientMode === 'custom') {
+                $email = trim($customEmail);
+            } else {
+                $email = trim((string)($student['email'] ?? ''));
+            }
+
+            if ($email === '' || !filter_var($email, FILTER_VALIDATE_EMAIL)) {
+                http_response_code(400);
+                echo json_encode(['success' => false, 'message' => 'Please enter a valid email address.']);
+                return;
+            }
+
+            $token = bin2hex(random_bytes(16));
+            $expiresAt = date('Y-m-d H:i:s', strtotime(app_now() . ' +24 hours'));
+
+            $this->db->table('password_resets')->insert([
+                'email' => $email,
+                'user_id' => $userId,
+                'token' => $token,
+                'type' => 'password',
+                'expires_at' => $expiresAt,
+                'used' => 0,
+                'created_at' => app_now(),
+                'updated_at' => app_now()
+            ]);
+
+            $this->call->helper('mail');
+            $this->call->helper('email_templates');
+
+            // Development reset URL base
+            $baseUrl = $_ENV['PASSWORD_RESET_BASE_URL'] ?? getenv('PASSWORD_RESET_BASE_URL') ?: 'https://dev.mcaportal.online';
+            $resetUrl = sprintf('%s/auth/reset?token=%s', rtrim($baseUrl, '/'), $token);
+            $logoUrl = rtrim($baseUrl, '/') . '/logo.png';
+            $subject = 'MCA Portal Password Reset';
+            
+            $studentName = trim(($student['first_name'] ?? '') . ' ' . ($student['last_name'] ?? ''));
+            if ($studentName === '') $studentName = 'Student';
+
+            $body = generate_password_reset_email($studentName, $resetUrl, $logoUrl);
+
+            $emailResult = sendNotif($email, $subject, $body);
+
+            if (empty($emailResult['success'])) {
+                http_response_code(500);
+                echo json_encode([
+                    'success' => false,
+                    'message' => 'Unable to send reset email. Please try again.'
+                ]);
+                return;
+            }
+
+            echo json_encode([
+                'success' => true,
+                'message' => 'Password reset link sent.'
+            ]);
+
+        } catch (Exception $e) {
+            http_response_code(500);
+            echo json_encode([
+                'success' => false,
+                'message' => 'Server error: ' . $e->getMessage()
+            ]);
+        }
+    }
+
+    /**
      * Get student grades summary across all courses for active academic period
      * GET /api/student/grades-summary?student_id=93&academic_period_id=20
      * 

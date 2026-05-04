@@ -16,6 +16,56 @@ import {
 } from "@/components/ui/dialog";
 import { BookOpen, User, Loader2, Phone, Mail, IdCard, GraduationCap, Calendar, Award, Search, Grid3x3, List } from "lucide-react";
 import { API_ENDPOINTS, apiGet } from "@/lib/api";
+import readingSubjectImage from "@/assets/images/subjects/reading.png";
+import mathSubjectImage from "@/assets/images/subjects/math.png";
+import mapehSubjectImage from "@/assets/images/subjects/mapeh.png";
+import makabansaSubjectImage from "@/assets/images/subjects/makabansa.png";
+import languageSubjectImage from "@/assets/images/subjects/language.png";
+import gmrcSubjectImage from "@/assets/images/subjects/gmrc.png";
+import filipinoSubjectImage from "@/assets/images/subjects/filipino.png";
+import ethicsSubjectImage from "@/assets/images/subjects/ethics.png";
+import eppSubjectImage from "@/assets/images/subjects/epp.png";
+import englishSubjectImage from "@/assets/images/subjects/english.png";
+import basicScienceSubjectImage from "@/assets/images/subjects/basicscience.png";
+import basicMathSubjectImage from "@/assets/images/subjects/basicmath.png";
+
+const normalizeSubjectText = (value: unknown) =>
+  String(value ?? "")
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, " ")
+    .trim();
+
+const isPreschoolLevel = (level: unknown, code: unknown) => {
+  const normalizedLevel = normalizeSubjectText(level);
+  const normalizedCode = normalizeSubjectText(code);
+  return (
+    normalizedLevel.includes("nursery") ||
+    normalizedLevel.includes("kinder") ||
+    /(^|\s)(n1|n2|kn)(\s|$)/.test(normalizedCode)
+  );
+};
+
+const getSubjectImage = (subject: any) => {
+  const code = normalizeSubjectText(subject?.course_code ?? subject?.code);
+  const name = normalizeSubjectText(subject?.name ?? subject?.course_name ?? subject?.title);
+  const level = normalizeSubjectText(subject?.level ?? subject?.year_level ?? subject?.yearLevel);
+  const preschool = isPreschoolLevel(level, code);
+
+  if (code.includes("read") || name.includes("reading")) return readingSubjectImage;
+  if (code.includes("lang") || name.includes("language development")) return languageSubjectImage;
+  if (code.includes("engl") || name.includes("english")) return englishSubjectImage;
+  if (code.includes("fili") || name.includes("filipino")) return filipinoSubjectImage;
+  if (code.includes("gmrc") || name.includes("good manners")) return gmrcSubjectImage;
+  if (code.includes("esp") || name.includes("ethics")) return ethicsSubjectImage;
+  if (code.includes("mapeh") || name.includes("music") || name.includes("arts") || name.includes("pe") || name.includes("health")) return mapehSubjectImage;
+  if (code.includes("epp") || name.includes("livelihood") || name.includes("entrepreneurship")) return eppSubjectImage;
+  if (code.includes("maka") || code.startsWith("ap") || name.includes("makabansa") || name.includes("araling panlipunan") || name.includes("patriotism")) return makabansaSubjectImage;
+  if (code.includes("sci") || name.includes("science")) return basicScienceSubjectImage;
+  if (code.includes("math") || name.includes("math")) return preschool || name.includes("basic math") ? basicMathSubjectImage : mathSubjectImage;
+
+  if (preschool) return languageSubjectImage;
+  return mathSubjectImage;
+};
 
 const MyCourses = () => {
   const { user, isAuthenticated } = useAuth();
@@ -455,51 +505,50 @@ const MyCourses = () => {
                 </p>
               </div>
             ) : viewMode === "grid" ? (
-              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
-                {filteredCourses.map((course) => (
-                  <div
-                    key={course.id}
-                    className="rounded-2xl border transition-all duration-200 flex flex-col overflow-hidden bg-white hover:shadow-lg hover:border-primary/30"
-                  >
-                    {/* Card top */}
-                    <div className="p-4 flex items-center gap-3">
-                      <div className="w-12 h-12 rounded-xl flex items-center justify-center shadow-md flex-shrink-0 bg-gradient-to-br from-primary to-accent">
-                        <BookOpen className="h-6 w-6 text-white" />
-                      </div>
-                      <div className="flex-1 min-w-0">
-                        <p className="font-bold text-base text-gray-900 leading-snug">{course.code}</p>
-                        <p className="text-sm text-muted-foreground line-clamp-2 leading-snug">{course.title}</p>
-                      </div>
-                    </div>
+              <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-4 gap-5">
+                {filteredCourses.map((course) => {
+                  const subjectImage = getSubjectImage({
+                    course_code: course.code,
+                    name: course.title,
+                    yearLevel: course.yearLevel,
+                  });
 
-                    {/* Instructor row */}
-                    <div className="px-4 pb-4">
-                      <button
-                        onClick={() => handleViewTeacher(course.teacherId)}
-                        className="w-full flex items-center gap-2 text-sm hover:text-primary transition-colors group"
-                      >
-                        <div className="h-7 w-7 rounded-full bg-primary/10 group-hover:bg-primary/20 flex items-center justify-center flex-shrink-0 transition-colors">
-                          <User className="h-3.5 w-3.5 text-primary" />
-                        </div>
-                        <div className="text-left flex-1 min-w-0">
-                          <p className="text-xs text-muted-foreground leading-none">Teacher</p>
-                          <p className="font-medium truncate text-gray-900 text-sm">{course.teacher}</p>
-                        </div>
-                      </button>
+                  return (
+                    <div
+                      key={course.id}
+                      className="group relative min-h-[240px] overflow-hidden rounded-2xl border border-blue-200 bg-slate-900 transition-all duration-300 hover:-translate-y-1 hover:shadow-xl"
+                    >
+                      <img
+                        src={subjectImage}
+                        alt={course.title}
+                        className="h-full w-full object-cover"
+                        loading="lazy"
+                      />
+                      <div className="absolute inset-0 bg-gradient-to-t from-slate-950/90 via-slate-900/45 to-transparent" />
+                      <div className="absolute inset-x-0 bottom-0 p-4">
+                        <Badge className="mb-2 inline-flex items-center gap-2 rounded-full border border-white/25 bg-black/35 px-3 py-1 text-xs font-semibold uppercase tracking-wide text-white">
+                          <BookOpen className="h-3.5 w-3.5" />
+                          Subject
+                        </Badge>
+                        <p className="text-xl font-semibold text-white leading-tight">{course.title}</p>
+                        <p className="mt-1 text-xs font-semibold uppercase tracking-wide text-blue-200">{course.code}</p>
+                        <button
+                          type="button"
+                          onClick={() => handleViewTeacher(course.teacherId)}
+                          className="mt-2 text-left text-sm leading-relaxed text-white/90 hover:text-white"
+                        >
+                          Instructor: {course.teacher || "TBA"}
+                        </button>
+                        <Button
+                          onClick={() => navigate(`/student/courses/${course.id}`)}
+                          className="mt-3 w-full border border-white/30 bg-white/15 text-white hover:bg-white/25"
+                        >
+                          View Class
+                        </Button>
+                      </div>
                     </div>
-
-                    {/* View Course button */}
-                    <div className="px-4 pb-4 mt-auto">
-                      <Button
-                        onClick={() => navigate(`/student/courses/${course.id}`)}
-                        className="w-full bg-gradient-to-r from-primary to-accent hover:from-primary/90 hover:to-accent/90 text-white shadow-sm font-medium text-sm"
-                      >
-                        <BookOpen className="h-4 w-4 mr-2" />
-                        View Course
-                      </Button>
-                    </div>
-                  </div>
-                ))}
+                  );
+                })}
               </div>
             ) : (
               <div className="space-y-2">

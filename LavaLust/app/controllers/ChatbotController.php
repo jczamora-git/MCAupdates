@@ -11,6 +11,8 @@ class ChatbotController extends Controller
         $this->call->model('ChatbotConversationModel');
         $this->call->library('session');
         $this->call->library('ChatbotDbContextService');
+        $this->call->library('ChatbotIntentRouter');
+        $this->call->library('ChatbotRouteRegistry');
     }
 
     public function api_get_knowledge()
@@ -201,14 +203,17 @@ class ChatbotController extends Controller
                 return;
             }
 
-            // Factual questions (fees, balance, teachers, PIN, Tagalog queries) are
-            // always about this school system — skip the guard entirely for them.
-            if (!$this->isFactualQuestion($message) && !$this->isSystemQuestion($message)) {
-                $response = 'I can only answer questions about the Campus Companion system. Try asking about enrollments, payments, fees, teachers, or your subjects.';
-                $source = 'guard';
+            $intentMeta = $this->ChatbotIntentRouter->detect($message, $role);
+            $intentCategory = $intentMeta['category'] ?? 'static_knowledge';
+            $intentName = $intentMeta['intent'] ?? null;
+            $userId = $this->session->userdata('user_id') ?? null;
+
+            if ($intentCategory === 'smalltalk_or_greeting') {
+                $response = $this->buildGreetingReply($role);
+                $source = 'intent';
 
                 $this->ChatbotConversationModel->create_entry([
-                    'user_id' => $this->session->userdata('user_id') ?? null,
+                    'user_id' => $userId,
                     'role' => $role,
                     'message' => $message,
                     'normalized_message' => $this->normalizeMessage($message),
@@ -222,7 +227,63 @@ class ChatbotController extends Controller
                 echo json_encode([
                     'success' => true,
                     'reply' => $response,
-                    'source' => $source
+                    'source' => $source,
+                    'intent' => $intentName,
+                    'intent_category' => $intentCategory,
+                ]);
+                return;
+            }
+
+            if ($intentCategory === 'restricted_or_out_of_scope') {
+                $response = 'I cannot access that information for your role.';
+                $source = 'guard';
+
+                $this->ChatbotConversationModel->create_entry([
+                    'user_id' => $userId,
+                    'role' => $role,
+                    'message' => $message,
+                    'normalized_message' => $this->normalizeMessage($message),
+                    'reply' => $response,
+                    'source' => $source,
+                ]);
+
+                error_log('Chatbot source: ' . $source);
+
+                http_response_code(200);
+                echo json_encode([
+                    'success' => true,
+                    'reply' => $response,
+                    'source' => $source,
+                    'intent' => $intentName,
+                    'intent_category' => $intentCategory,
+                ]);
+                return;
+            }
+
+            // Factual questions (fees, balance, teachers, PIN, Tagalog queries) are
+            // always about this school system — skip the guard entirely for them.
+            if (!$this->isFactualQuestion($message) && !$this->isSystemQuestion($message)) {
+                $response = 'I can only answer questions about the Campus Companion system. Try asking about enrollments, payments, fees, teachers, or your subjects.';
+                $source = 'guard';
+
+                $this->ChatbotConversationModel->create_entry([
+                    'user_id' => $userId,
+                    'role' => $role,
+                    'message' => $message,
+                    'normalized_message' => $this->normalizeMessage($message),
+                    'reply' => $response,
+                    'source' => $source,
+                ]);
+
+                error_log('Chatbot source: ' . $source);
+
+                http_response_code(200);
+                echo json_encode([
+                    'success' => true,
+                    'reply' => $response,
+                    'source' => $source,
+                    'intent' => $intentName,
+                    'intent_category' => $intentCategory,
                 ]);
                 return;
             }
@@ -232,7 +293,7 @@ class ChatbotController extends Controller
                 $source = 'guard';
 
                 $this->ChatbotConversationModel->create_entry([
-                    'user_id' => $this->session->userdata('user_id') ?? null,
+                    'user_id' => $userId,
                     'role' => $role,
                     'message' => $message,
                     'normalized_message' => $this->normalizeMessage($message),
@@ -246,7 +307,9 @@ class ChatbotController extends Controller
                 echo json_encode([
                     'success' => true,
                     'reply' => $response,
-                    'source' => $source
+                    'source' => $source,
+                    'intent' => $intentName,
+                    'intent_category' => $intentCategory,
                 ]);
                 return;
             }
@@ -256,28 +319,74 @@ class ChatbotController extends Controller
             $knowledge = $this->filterKnowledgeByRole($knowledge, $role);
             // PIN questions always get a structured canned reply — skip shortcut/LLM
             $pinReply = $this->buildPinReply($message);
-            // Skip shortcuts for factual/data questions — they must go to DB context + LLM
-            $shortcut = ($pinReply === null && $this->isFactualQuestion($message))
-                ? null
-                : ($pinReply ?? $this->buildShortcutReply($message, $knowledge));
-            if ($shortcut) {
-                $response = $shortcut;
+            $response = null;
+            $source = null;
+
+            if ($intentCategory === 'smalltalk_or_greeting') {
+                $response = $this->buildGreetingReply($role);
+                $source = 'intent';
+            } elseif ($pinReply) {
+                $response = $pinReply;
                 $source = 'knowledge';
-            } elseif ($knowledgeOnly) {
-                $response = 'I do not have that information yet. Please contact an administrator or add it to the knowledge base.';
-                $source = 'knowledge';
-            } else {
-                $dbContext = $this->ChatbotDbContextService->build(
-                    $message,
-                    $role,
-                    $this->session->userdata('user_id') ?? null
-                );
-                $response = $this->callChatModel($message, $knowledge, $instructions, $dbContext);
-                $source = 'llm';
+            } elseif ($intentCategory === 'navigation') {
+                $routeBlock = ChatbotRouteRegistry::buildContext($role);
+                if ($routeBlock !== '') {
+                    $response = "Here are the pages you can access:\n" . $routeBlock;
+                    $source = 'route';
+                }
+            } elseif ($intentCategory === 'live_data') {
+                if ($knowledgeOnly) {
+                    $response = 'I do not have that information yet. Please contact an administrator or add it to the knowledge base.';
+                    $source = 'knowledge';
+                } else {
+                    $dbContext = $this->ChatbotDbContextService->build(
+                        $message,
+                        $role,
+                        $userId,
+                        $intentName
+                    );
+                    if ($dbContext === '') {
+                        $response = $this->buildNoLiveDataReply($intentName, $role);
+                        $source = 'live_data';
+                    } else {
+                        $response = $this->callChatModel($message, $knowledge, $instructions, $dbContext);
+                        $source = 'live_data';
+                    }
+                }
+            } elseif ($intentCategory === 'support_troubleshooting') {
+                $shortcut = $this->buildShortcutReply($message, $knowledge);
+                if ($shortcut) {
+                    $response = $shortcut;
+                    $source = 'knowledge';
+                } elseif ($knowledgeOnly) {
+                    $response = 'I do not have that information yet. Please contact an administrator or add it to the knowledge base.';
+                    $source = 'knowledge';
+                } else {
+                    $response = $this->callChatModel($message, $knowledge, $instructions, '');
+                    $source = 'llm';
+                }
+            }
+
+            if ($response === null) {
+                $shortcut = $this->isFactualQuestion($message)
+                    ? null
+                    : $this->buildShortcutReply($message, $knowledge);
+
+                if ($shortcut) {
+                    $response = $shortcut;
+                    $source = 'knowledge';
+                } elseif ($knowledgeOnly) {
+                    $response = 'I do not have that information yet. Please contact an administrator or add it to the knowledge base.';
+                    $source = 'knowledge';
+                } else {
+                    $dbContext = $this->ChatbotDbContextService->build($message, $role, $userId);
+                    $response = $this->callChatModel($message, $knowledge, $instructions, $dbContext);
+                    $source = 'llm';
+                }
             }
 
             $this->ChatbotConversationModel->create_entry([
-                'user_id' => $this->session->userdata('user_id') ?? null,
+                'user_id' => $userId,
                 'role' => $role,
                 'message' => $message,
                 'normalized_message' => $normalizedMessage,
@@ -291,7 +400,9 @@ class ChatbotController extends Controller
             echo json_encode([
                 'success' => true,
                 'reply' => $response,
-                'source' => $source
+                'source' => $source,
+                'intent' => $intentName,
+                'intent_category' => $intentCategory,
             ]);
         } catch (Exception $e) {
             http_response_code(500);
@@ -526,6 +637,60 @@ class ChatbotController extends Controller
              . "Kung may problema pa rin, makipag-ugnayan sa admin.";
     }
 
+    private function buildGreetingReply($role)
+    {
+        switch ($role) {
+            case 'admin':
+                return 'Hi! I’m Jiji, your Campus Companion assistant. I can help you with admin tasks like student management, enrollments, payments, announcements, RFID attendance, reports, and chatbot knowledge.';
+            case 'teacher':
+                return 'Hi! I’m Jiji, your Campus Companion assistant. I can help you with your courses, class students, attendance, grades, activities, quizzes, announcements, and navigation.';
+            case 'student':
+                return 'Hi! I’m Jiji, your Campus Companion assistant. I can help you with your subjects, activities, quizzes, grades, enrollment status, payments, announcements, and concerns.';
+            case 'enrollee':
+                return 'Hi! I’m Jiji, your Campus Companion assistant. I can help you with enrollment, payment PIN verification, payment submission, requirements, and application status.';
+            default:
+                return 'Hi! I’m Jiji, your Campus Companion assistant. I can help you with enrollment, payments, subjects, grades, announcements, RFID attendance, reports, and navigation in the MCA portal.';
+        }
+    }
+
+    private function buildNoLiveDataReply($intent, $role)
+    {
+        $suggestion = $this->getRouteSuggestionForIntent($intent, $role);
+        $response = 'No record was found for that request.';
+        if ($suggestion) {
+            $response .= ' You can check ' . $suggestion . '.';
+        }
+        return $response;
+    }
+
+    private function getRouteSuggestionForIntent($intent, $role)
+    {
+        $map = [
+            'student_enrollment_status' => ['label' => 'My Enrollments', 'route' => '/enrollment/my-enrollments'],
+            'student_payment_summary' => ['label' => 'My Payment', 'route' => '/enrollment/payment'],
+            'student_subjects' => ['label' => 'My Courses', 'route' => '/student/courses'],
+            'student_teachers' => ['label' => 'My Courses', 'route' => '/student/courses'],
+            'student_grades' => ['label' => 'My Grades', 'route' => '/student/grades'],
+            'teacher_subjects' => ['label' => 'My Courses', 'route' => '/teacher/courses'],
+            'admin_enrollment_summary' => ['label' => 'Enrollments', 'route' => '/admin/enrollments'],
+            'admin_payment_summary' => ['label' => 'Payments', 'route' => '/admin/payments'],
+            'admin_rfid_summary' => ['label' => 'RFID Attendance', 'route' => '/admin/rfid-attendance'],
+            'admin_pending_concerns' => ['label' => 'Concerns', 'route' => '/admin/sentiment'],
+        ];
+
+        if (empty($intent) || !isset($map[$intent])) {
+            return null;
+        }
+
+        $entry = $map[$intent];
+        $prefixes = $this->getAllowedRoutePrefixes($role);
+        if ($prefixes !== null && !$this->isRouteAllowed($entry['route'], $prefixes)) {
+            return null;
+        }
+
+        return '[link:' . $entry['label'] . '|' . $entry['route'] . ']';
+    }
+
     private function buildShortcutReply($message, $knowledge)
     {
         if (!is_array($knowledge) || empty($knowledge)) {
@@ -623,6 +788,7 @@ class ChatbotController extends Controller
         }
         if (!empty($dbContext)) {
             $systemParts[] = "LIVE DATABASE CONTEXT (use these exact figures to answer — do not invent numbers):\n" . $dbContext;
+            $systemParts[] = 'For current or personal data, use only the provided database context. If the context is missing, say the record was not found or direct the user to the correct page.';
         }
 
         $systemContent = implode("\n\n", $systemParts);

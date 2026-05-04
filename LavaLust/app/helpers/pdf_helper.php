@@ -432,6 +432,60 @@ function build_gwa_summary_polished_html($grades)
 }
 
 /**
+ * Format a report column label from a key.
+ */
+function format_report_label($key)
+{
+    $label = trim((string)$key);
+    if ($label === '') return '';
+    if (strpos($label, ' ') !== false) return $label;
+
+    $label = preg_replace('/([a-z])([A-Z])/', '$1 $2', $label);
+    $label = str_replace('_', ' ', $label);
+    $label = preg_replace('/\s+/', ' ', $label);
+
+    return ucwords($label);
+}
+
+/**
+ * Normalize a report cell value to a safe string.
+ */
+function report_value_to_string($value)
+{
+    if (is_array($value) || is_object($value)) {
+        return json_encode($value, JSON_UNESCAPED_UNICODE);
+    }
+
+    return (string)$value;
+}
+
+/**
+ * Build HTML for admin report PDF export.
+ */
+function build_admin_report_html($payload = [])
+{
+    $reportTitle = (string)($payload['reportTitle'] ?? 'REPORT');
+    $reportTypeLabel = (string)($payload['reportTypeLabel'] ?? 'Report');
+    $generatedBy = (string)($payload['generatedBy'] ?? 'Admin');
+    $generatedAt = (string)($payload['generatedAt'] ?? date('F d, Y h:i A'));
+    $recordCount = (int)($payload['recordCount'] ?? 0);
+    $summary = is_array($payload['summary'] ?? null) ? $payload['summary'] : [];
+    $columns = is_array($payload['columns'] ?? null) ? $payload['columns'] : [];
+    $rows = is_array($payload['rows'] ?? null) ? $payload['rows'] : [];
+    $logoDataUri = (string)($payload['logoDataUri'] ?? '');
+    $footerText = (string)($payload['footerText'] ?? 'MCA Portal Administrative Reports');
+
+    $viewPath = dirname(__DIR__) . DIRECTORY_SEPARATOR . 'views' . DIRECTORY_SEPARATOR . 'reports' . DIRECTORY_SEPARATOR . 'admin_report_pdf.php';
+    if (!file_exists($viewPath)) {
+        throw new Exception('Admin report PDF view not found: ' . $viewPath);
+    }
+
+    ob_start();
+    include $viewPath;
+    return ob_get_clean();
+}
+
+/**
  * Build grades table HTML
  * 
  * @param array $grades Grade records

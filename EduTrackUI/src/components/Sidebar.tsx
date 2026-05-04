@@ -375,7 +375,7 @@ export const Sidebar = () => {
 
   const studentLinks = [
     { to: "/student/dashboard", icon: BarChart3, label: "Dashboard" },
-    ...(FEATURES.courses && !isProd ? [{ to: "/student/courses", icon: BookOpen, label: "My Courses" }] : []),
+    ...(FEATURES.courses && !isProd ? [{ to: "/student/courses", icon: BookOpen, label: "My Subjects" }] : []),
     ...(FEATURES.enrollment ? [{ to: "/enrollment/my-enrollments", icon: FileText, label: "My Enrollments" }] : []),
     ...(FEATURES.grading ? [{ to: "/student/grades", icon: Award, label: "My Grades" }] : []),
     ...(FEATURES.payment ? [{ to: "/enrollment/payment", icon: Coins, label: "Payment" }] : []),

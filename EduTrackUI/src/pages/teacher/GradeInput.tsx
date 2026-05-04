@@ -1,4 +1,4 @@
-import { useEffect, useState, useRef } from "react";
+import { useEffect, useState, useRef, useMemo } from "react";
 import { useNavigate } from "react-router-dom";
 import { useAuth } from "@/hooks/useAuth";
 import { DashboardLayout } from "@/components/DashboardLayout";
@@ -1089,9 +1089,13 @@ const GradeInput = () => {
   const writtenItems = componentItems.written;
   const performanceItems = componentItems.performance;
   const quarterlyItems = componentItems.quarterly;
+  const hasQuarterlyAssessmentItem = useMemo(() => {
+    return Array.isArray(quarterlyItems) && quarterlyItems.length > 0;
+  }, [quarterlyItems]);
+  const showQuarterGrade = hasQuarterlyAssessmentItem;
   const writtenSlots = Math.max(8, writtenItems.length);
   const performanceSlots = Math.max(5, performanceItems.length);
-  const totalGradeColumns = 1 + (writtenSlots + 3) + (performanceSlots + 3) + 3 + 2;
+  const totalGradeColumns = 1 + (writtenSlots + 3) + (performanceSlots + 3) + 3 + (showQuarterGrade ? 2 : 0);
 
   return (
     <DashboardLayout>
@@ -1107,10 +1111,10 @@ const GradeInput = () => {
               <FileSpreadsheet className="h-4 w-4 mr-2" />
               Export CSV
             </Button> */}
-            <Button variant="outline" onClick={handleExportClassRecordExcel}>
+            {/* <Button variant="outline" onClick={handleExportClassRecordExcel}>
               <FileSpreadsheet className="h-4 w-4 mr-2" />
               Export Excel
-            </Button>
+            </Button> */}
             <Button
               onClick={handleSubmitGrades}
               disabled={loading.submitting || submissionControlLoading || !submissionEnabled}
@@ -1249,6 +1253,11 @@ const GradeInput = () => {
                 <CardDescription className="hidden md:block">
                   Written Work ({currentWeights.ww}%) • Performance Tasks ({currentWeights.pt}%) • Quarterly Assessment ({currentWeights.qa}%)
                 </CardDescription>
+                {!showQuarterGrade && (
+                  <div className="text-xs text-muted-foreground">
+                    Quarter grade is hidden until a quarterly assessment/final exam is added.
+                  </div>
+                )}
               </div>
               <div>
                 <Button
@@ -1286,9 +1295,11 @@ const GradeInput = () => {
                       Quarterly Assessment ({currentWeights.qa}%)
                     </th>
                     {/* Total */}
-                    <th colSpan={2} className="p-2 text-center font-semibold bg-table-total">
-                      {selectedQuarter ?? 'Quarter'} Grade
-                    </th>
+                    {showQuarterGrade && (
+                      <th colSpan={2} className="p-2 text-center font-semibold bg-table-total">
+                        {selectedQuarter ?? 'Quarter'} Grade
+                      </th>
+                    )}
                   </tr>
                   <tr className="border-b border-border bg-muted/50">
                     <th className="p-2 text-left text-xs font-medium sticky left-0 z-30 bg-muted border-r border-border min-w-[200px] max-w-[200px] w-[200px]">ID / Name</th>
@@ -1321,8 +1332,12 @@ const GradeInput = () => {
                     <th className="p-1 text-center font-medium w-12 bg-table-exam/50">PS</th>
                     <th className="p-1 text-center font-medium w-12 bg-table-exam border-r border-border">WS</th>
                     {/* Total columns */}
-                    <th className="p-1 text-center font-medium w-16 bg-table-total">Initial<br/><span className="text-[10px] font-normal">(0-100)</span></th>
-                    <th className="p-1 text-center font-medium w-14 bg-table-total">Grade</th>
+                    {showQuarterGrade && (
+                      <>
+                        <th className="p-1 text-center font-medium w-16 bg-table-total">Initial<br/><span className="text-[10px] font-normal">(0-100)</span></th>
+                        <th className="p-1 text-center font-medium w-14 bg-table-total">Grade</th>
+                      </>
+                    )}
                   </tr>
                   <tr className="border-b border-border bg-muted/30 text-[10px]">
                     <th className="p-1 text-right font-medium sticky left-0 z-30 bg-muted border-r border-border min-w-[200px] max-w-[200px] w-[200px]">HPS →</th>
@@ -1350,8 +1365,12 @@ const GradeInput = () => {
                     <th className="p-1 text-center text-muted-foreground bg-table-exam/30">{quarterlyItems.reduce((sum, act) => sum + parseFloat(act.max_score ?? 0), 0)}</th>
                     <th className="p-1 text-center text-muted-foreground bg-table-exam/30">100%</th>
                     <th className="p-1 text-center text-muted-foreground bg-table-exam border-r border-border">{currentWeights.qa}%</th>
-                    <th className="p-1 text-center text-muted-foreground bg-table-total">100%</th>
-                    <th className="p-1 text-center text-muted-foreground bg-table-total">100</th>
+                    {showQuarterGrade && (
+                      <>
+                        <th className="p-1 text-center text-muted-foreground bg-table-total">100%</th>
+                        <th className="p-1 text-center text-muted-foreground bg-table-total">100</th>
+                      </>
+                    )}
                   </tr>
                 </thead>
                 <tbody>
@@ -1431,12 +1450,16 @@ const GradeInput = () => {
                             {grades.quarterly.ws.toFixed(2)}
                           </td>
                           {/* Totals */}
-                          <td className="p-1 text-center font-bold bg-table-total text-xs">
-                            {grades.initialGrade.toFixed(2)}
-                          </td>
-                          <td className="p-1 text-center font-bold bg-table-total text-xs">
-                            {grades.finalGrade}
-                          </td>
+                          {showQuarterGrade && (
+                            <>
+                              <td className="p-1 text-center font-bold bg-table-total text-xs">
+                                {grades.initialGrade.toFixed(2)}
+                              </td>
+                              <td className="p-1 text-center font-bold bg-table-total text-xs">
+                                {grades.finalGrade}
+                              </td>
+                            </>
+                          )}
                         </tr>
                       </>
                     );

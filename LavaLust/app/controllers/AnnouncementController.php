@@ -33,7 +33,8 @@ class AnnouncementController extends Controller
             return ['students', 'my_students', 'my_classes', 'parents_of_my_students'];
         }
 
-        return ['all', 'students', 'teachers', 'parents', 'staff'];
+        // Admin: only database-supported audience values
+        return ['all', 'students', 'teachers'];
     }
 
     private function is_owner_or_admin($announcement, $role, $user_id)
@@ -173,6 +174,9 @@ class AnnouncementController extends Controller
 
             if ($role === 'teacher') {
                 $filters['created_by'] = $user_id;
+            } elseif ($role === 'admin') {
+                // Admin only sees admin-created announcements (created_by refers to admin user)
+                $filters['created_by_role'] = 'admin';
             }
 
             if ($role === 'student') {
@@ -185,6 +189,10 @@ class AnnouncementController extends Controller
                     $filters['student_section_id'] = $student['section_id'];
                 }
             }
+
+            // Auto-archive expired announcements before fetching list
+            $this->AnnouncementModel->auto_archive_expired();
+
             $list = $this->AnnouncementModel->get_all_with_read_status($filters, $user_id);
 
             http_response_code(200);
@@ -299,6 +307,16 @@ class AnnouncementController extends Controller
             }
 
             $data['created_by'] = $this->get_current_user_id();
+
+            // Auto-archive if status is active but ends_at is already in the past
+            if (($data['status'] ?? 'active') === 'active' && !empty($data['ends_at'])) {
+                $ends_at = strtotime($data['ends_at']);
+                $now = strtotime(app_now());
+                if ($ends_at !== false && $now !== false && $ends_at < $now) {
+                    $data['status'] = 'archived';
+                }
+            }
+
             $newId = $this->AnnouncementModel->create($data);
 
             if ($newId) {
@@ -416,6 +434,16 @@ class AnnouncementController extends Controller
                 echo json_encode(['success' => false, 'message' => 'Invalid audience for role']);
                 return;
             }
+
+            // Auto-archive if status is active but ends_at is already in the past
+            if (isset($data['status']) && $data['status'] === 'active' && !empty($data['ends_at'])) {
+                $ends_at = strtotime($data['ends_at']);
+                $now = strtotime(app_now());
+                if ($ends_at !== false && $now !== false && $ends_at < $now) {
+                    $data['status'] = 'archived';
+                }
+            }
+
             $res = $this->AnnouncementModel->update_announcement($id, $data);
             if ($res) {
                 $updated = $this->AnnouncementModel->get_announcement($id);

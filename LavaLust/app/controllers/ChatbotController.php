@@ -193,6 +193,7 @@ class ChatbotController extends Controller
             $message = trim($data['message'] ?? '');
             $instructions = trim($data['instructions'] ?? '');
             $role = $this->session->userdata('role') ?? 'student';
+            $role = strtolower(trim((string) $role));
             $knowledgeOnly = (bool) config_item('chat_knowledge_only');
             $requestKnowledgeOnly = !empty($data['knowledge_only']);
             $knowledgeOnly = $knowledgeOnly || $requestKnowledgeOnly;
@@ -206,6 +207,7 @@ class ChatbotController extends Controller
             $intentMeta = $this->ChatbotIntentRouter->detect($message, $role);
             $intentCategory = $intentMeta['category'] ?? 'static_knowledge';
             $intentName = $intentMeta['intent'] ?? null;
+            $intentParams = $intentMeta['params'] ?? [];
             $userId = $this->session->userdata('user_id') ?? null;
 
             if ($intentCategory === 'smalltalk_or_greeting') {
@@ -230,6 +232,7 @@ class ChatbotController extends Controller
                     'source' => $source,
                     'intent' => $intentName,
                     'intent_category' => $intentCategory,
+                    'intent_params' => $intentParams,
                 ]);
                 return;
             }
@@ -256,13 +259,24 @@ class ChatbotController extends Controller
                     'source' => $source,
                     'intent' => $intentName,
                     'intent_category' => $intentCategory,
+                    'intent_params' => $intentParams,
                 ]);
                 return;
             }
 
+            $validIntentCategories = [
+                'live_data',
+                'navigation',
+                'static_knowledge',
+                'support_troubleshooting',
+                'smalltalk_or_greeting',
+            ];
+            $hasValidIntent = isset($intentCategory)
+                && in_array($intentCategory, $validIntentCategories, true);
+
             // Factual questions (fees, balance, teachers, PIN, Tagalog queries) are
             // always about this school system — skip the guard entirely for them.
-            if (!$this->isFactualQuestion($message) && !$this->isSystemQuestion($message)) {
+            if (!$hasValidIntent && !$this->isFactualQuestion($message) && !$this->isSystemQuestion($message)) {
                 $response = 'I can only answer questions about the Campus Companion system. Try asking about enrollments, payments, fees, teachers, or your subjects.';
                 $source = 'guard';
 
@@ -284,6 +298,7 @@ class ChatbotController extends Controller
                     'source' => $source,
                     'intent' => $intentName,
                     'intent_category' => $intentCategory,
+                    'intent_params' => $intentParams,
                 ]);
                 return;
             }
@@ -310,6 +325,7 @@ class ChatbotController extends Controller
                     'source' => $source,
                     'intent' => $intentName,
                     'intent_category' => $intentCategory,
+                    'intent_params' => $intentParams,
                 ]);
                 return;
             }
@@ -329,10 +345,27 @@ class ChatbotController extends Controller
                 $response = $pinReply;
                 $source = 'knowledge';
             } elseif ($intentCategory === 'navigation') {
-                $routeBlock = ChatbotRouteRegistry::buildContext($role);
-                if ($routeBlock !== '') {
-                    $response = "Here are the pages you can access:\n" . $routeBlock;
+                $response = $this->buildNavigationReply($intentName, $role, $message);
+                if ($response !== null) {
                     $source = 'route';
+                } else {
+                    $directIntents = [
+                        'enrollment_approval_navigation',
+                        'uniform_orders_navigation',
+                        'subject_assignment_navigation',
+                        'password_help',
+                        'pin_help',
+                    ];
+                    if (in_array($intentName, $directIntents, true)) {
+                        $response = 'That page is only available to the roles that can access it.';
+                        $source = 'route';
+                    } else {
+                        $routeBlock = ChatbotRouteRegistry::buildContext($role);
+                        if ($routeBlock !== '') {
+                            $response = "Here are the pages you can access:\n" . $routeBlock;
+                            $source = 'route';
+                        }
+                    }
                 }
             } elseif ($intentCategory === 'live_data') {
                 if ($knowledgeOnly) {
@@ -343,13 +376,21 @@ class ChatbotController extends Controller
                         $message,
                         $role,
                         $userId,
-                        $intentName
+                        $intentName,
+                        $intentParams
                     );
                     if ($dbContext === '') {
                         $response = $this->buildNoLiveDataReply($intentName, $role);
                         $source = 'live_data';
                     } else {
-                        $response = $this->callChatModel($message, $knowledge, $instructions, $dbContext);
+                        $noKnowledgeIntents = [
+                            'student_subjects',
+                            'student_teacher_by_subject',
+                            'teacher_subjects',
+                            'teacher_advisory',
+                        ];
+                        $knowledgeForLive = in_array($intentName, $noKnowledgeIntents, true) ? [] : $knowledge;
+                        $response = $this->callChatModel($message, $knowledgeForLive, $instructions, $dbContext);
                         $source = 'live_data';
                     }
                 }
@@ -403,6 +444,7 @@ class ChatbotController extends Controller
                 'source' => $source,
                 'intent' => $intentName,
                 'intent_category' => $intentCategory,
+                'intent_params' => $intentParams,
             ]);
         } catch (Exception $e) {
             http_response_code(500);
@@ -492,7 +534,10 @@ class ChatbotController extends Controller
             // Tagalog — enrollment / navigation
             'mag-enroll', 'naka-enroll', 'pagpatala', 'saan', 'paano', 'anong', 'nasaan',
             // Tagalog — people / account
-            'subject ko', 'mga subject', 'teacher ko', 'adviser ko', 'guro ko', 'mga guro',
+            'subject ko', 'mga subject', 'teacher ko', 'adviser ko', 'advisor ko', 'advisory',
+            'homeroom', 'class advisory', 'advisory class', 'section na adviser',
+            'handled subjects', 'subject na handle', 'teacher load',
+            'guro ko', 'mga guro',
             'nakalimutan', 'nalimutan', 'pin ko', 'ang pin', 'password ko',
             // Tagalog — general
             'anunsiyo', 'grado', 'attendance ko',
@@ -653,9 +698,111 @@ class ChatbotController extends Controller
         }
     }
 
+    private function buildNavigationReply($intentName, $role, $message)
+    {
+        if (empty($intentName)) {
+            return null;
+        }
+
+        if ($intentName === 'password_help') {
+            return $this->buildPasswordHelpReply($role, $message);
+        }
+
+        if ($intentName === 'pin_help') {
+            return $this->buildPinReply($message);
+        }
+
+        $link = $this->getRouteSuggestionForIntent($intentName, $role);
+        if ($link === null) {
+            return null;
+        }
+
+        $isTagalog = $this->isTagalogMessage($message);
+        switch ($intentName) {
+            case 'subject_assignment_navigation':
+                return $isTagalog
+                    ? 'Sa Subject Assignment page ka mag-aassign ng subjects sa teachers at sections. ' . $link
+                    : 'You can assign subjects to teachers and sections on the Subject Assignment page. ' . $link;
+            case 'enrollment_approval_navigation':
+                return $isTagalog
+                    ? 'Sa Enrollments page ina-approve at nire-review ng admin ang enrollment applications. ' . $link
+                    : 'Enrollment applications are reviewed and approved on the Enrollments page. ' . $link;
+            case 'uniform_orders_navigation':
+                return $isTagalog
+                    ? 'Sa Uniform Orders page mino-monitor at pini-process ng admin ang uniform orders. ' . $link
+                    : 'Uniform orders are managed and processed on the Uniform Orders page. ' . $link;
+            case 'teacher_names_navigation':
+                return $isTagalog
+                    ? 'Makikita ang teacher names sa page na ito: ' . $link
+                    : 'You can find teacher names on this page: ' . $link;
+            default:
+                return $isTagalog
+                    ? 'Narito ang tamang page: ' . $link
+                    : 'Use this page: ' . $link;
+        }
+    }
+
+    private function buildPasswordHelpReply($role, $message)
+    {
+        $isTagalog = $this->isTagalogMessage($message);
+        $resetLink = '[link:Forgot Password|/auth/forgot-password]';
+        $settingsLink = null;
+        $settingsRoute = null;
+
+        switch ($role) {
+            case 'student':
+                $settingsLink = '[link:Student Settings|/student/settings]';
+                $settingsRoute = '/student/settings';
+                break;
+            case 'teacher':
+                $settingsLink = '[link:Teacher Settings|/teacher/settings]';
+                $settingsRoute = '/teacher/settings';
+                break;
+            case 'admin':
+                $settingsLink = '[link:Admin Settings|/admin/settings]';
+                $settingsRoute = '/admin/settings';
+                break;
+        }
+
+        $prefixes = $this->getAllowedRoutePrefixes($role);
+        if ($settingsLink && $settingsRoute && $prefixes !== null && !$this->isRouteAllowed($settingsRoute, $prefixes)) {
+            $settingsLink = null;
+        }
+
+        if ($isTagalog) {
+            $steps = 'Pwede kang magpalit ng password gamit ang Forgot Password page: ' . $resetLink . '.';
+            if ($settingsLink) {
+                $steps .= ' Kung naka-login ka, pwede rin sa Settings: ' . $settingsLink . '.';
+            }
+            return $steps;
+        }
+
+        $steps = 'You can change your password via the Forgot Password page: ' . $resetLink . '.';
+        if ($settingsLink) {
+            $steps .= ' If you are logged in, you can also use Settings: ' . $settingsLink . '.';
+        }
+        return $steps;
+    }
+
+    private function isTagalogMessage($message)
+    {
+        $text = mb_strtolower((string) $message);
+        $keywords = ['paano', 'saan', 'sino', 'ilan', 'magkano', 'bakit', 'ano', 'tulong', 'guro', 'adviser', 'bayad'];
+        foreach ($keywords as $kw) {
+            if (mb_strpos($text, $kw) !== false) {
+                return true;
+            }
+        }
+        return false;
+    }
+
     private function buildNoLiveDataReply($intent, $role)
     {
         $suggestion = $this->getRouteSuggestionForIntent($intent, $role);
+        if ($intent === 'teacher_advisory') {
+            return 'Wala akong nakitang advisory section na naka-assign sa current records. Maaari mo itong i-check sa My Courses page. [link:Open My Courses|/teacher/courses]';
+        }
+
         $response = 'No record was found for that request.';
         if ($suggestion) {
             $response .= ' You can check ' . $suggestion . '.';
@@ -670,13 +817,31 @@ class ChatbotController extends Controller
             'student_payment_summary' => ['label' => 'My Payment', 'route' => '/enrollment/payment'],
             'student_subjects' => ['label' => 'My Courses', 'route' => '/student/courses'],
             'student_teachers' => ['label' => 'My Courses', 'route' => '/student/courses'],
+            'student_teacher_by_subject' => ['label' => 'Open My Courses', 'route' => '/student/courses'],
             'student_grades' => ['label' => 'My Grades', 'route' => '/student/grades'],
+            'student_next_payment' => ['label' => 'My Payment', 'route' => '/enrollment/payment'],
             'teacher_subjects' => ['label' => 'My Courses', 'route' => '/teacher/courses'],
+            'teacher_advisory' => ['label' => 'Open My Courses', 'route' => '/teacher/courses'],
             'admin_enrollment_summary' => ['label' => 'Enrollments', 'route' => '/admin/enrollments'],
             'admin_payment_summary' => ['label' => 'Payments', 'route' => '/admin/payments'],
             'admin_rfid_summary' => ['label' => 'RFID Attendance', 'route' => '/admin/rfid-attendance'],
             'admin_pending_concerns' => ['label' => 'Concerns', 'route' => '/admin/sentiment'],
+            'feedback_negative_count' => ['label' => 'Concerns', 'route' => '/admin/sentiment'],
+            'enrollment_count' => ['label' => 'Enrollments', 'route' => '/admin/enrollments'],
+            'payment_plan_count' => ['label' => 'Payment Plans', 'route' => '/admin/payment-plans'],
+            'teacher_lookup' => ['label' => 'Subject Assignment', 'route' => '/admin/assignments'],
+            'subject_assignment_navigation' => ['label' => 'Open Subject Assignment', 'route' => '/admin/assignments'],
+            'enrollment_approval_navigation' => ['label' => 'Open Enrollments', 'route' => '/admin/enrollments'],
+            'uniform_orders_navigation' => ['label' => 'Open Uniform Orders', 'route' => '/admin/uniform-orders'],
         ];
+
+        if ($intent === 'teacher_names_navigation') {
+            if ($role === 'admin') {
+                $map[$intent] = ['label' => 'Manage Students', 'route' => '/admin/users/students'];
+            } else {
+                $map[$intent] = ['label' => 'My Courses', 'route' => '/student/courses'];
+            }
+        }
 
         if (empty($intent) || !isset($map[$intent])) {
             return null;

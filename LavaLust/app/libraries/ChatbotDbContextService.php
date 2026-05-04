@@ -34,9 +34,10 @@ class ChatbotDbContextService
      * @param  string       $role     User role (admin|teacher|student|enrollee)
      * @param  int|null     $userId   Logged-in user ID
      * @param  string|null  $intent   Optional intent name from router
+     * @param  array|null   $intentParams Optional intent params
      * @return string                 Multi-line context string (empty string if nothing relevant)
      */
-    public function build($message, $role, $userId, $intent = null)
+    public function build($message, $role, $userId, $intent = null, $intentParams = null)
     {
         $lines = [];
 
@@ -56,6 +57,7 @@ class ChatbotDbContextService
         $feeType      = $this->extractFeeType($message);
 
         $intent = $intent ? mb_strtolower(trim((string) $intent)) : null;
+        $intentParams = is_array($intentParams) ? $intentParams : [];
         if (!empty($intent)) {
             $isFee = $isEnrollment = $isPayment = $isPeriod = $isTeacher = $isSubject = false;
             $isGrades = $isActivities = $isRfid = $isConcerns = $isNavigation = $isPinIssue = false;
@@ -67,6 +69,9 @@ class ChatbotDbContextService
             } elseif (in_array($intent, ['student_subjects', 'student_teachers', 'teacher_subjects'], true)) {
                 $isSubject = true;
                 $isTeacher = true;
+            } elseif (in_array($intent, ['student_teacher_by_subject', 'teacher_advisory'], true)) {
+                $isSubject = false;
+                $isTeacher = false;
             } elseif (in_array($intent, ['student_grades'], true)) {
                 $isGrades = true;
             } elseif (in_array($intent, ['admin_rfid_summary'], true)) {
@@ -138,6 +143,18 @@ class ChatbotDbContextService
             }
         }
 
+        // ── Enrollment count summary (admin) ───────────────────────────────
+        if ($intent === 'enrollment_count') {
+            if ($role === 'admin') {
+                $block = $this->getEnrollmentCount($intentParams);
+                if ($block !== '') {
+                    $lines[] = $block;
+                }
+            } else {
+                $lines[] = $this->buildAccessDeniedContext('enrollment_count');
+            }
+        }
+
         // ── Payment context (student or admin summary) ───────────────────────
         if ($isPayment) {
             if ($role === 'student') {
@@ -154,6 +171,18 @@ class ChatbotDbContextService
                 }
             } else {
                 $lines[] = $this->buildAccessDeniedContext('payment_summary');
+            }
+        }
+
+        // ── Payment plan count (admin) ─────────────────────────────────────
+        if ($intent === 'payment_plan_count') {
+            if ($role === 'admin') {
+                $block = $this->getPaymentPlanCount($intentParams['plan_type'] ?? null);
+                if ($block !== '') {
+                    $lines[] = $block;
+                }
+            } else {
+                $lines[] = $this->buildAccessDeniedContext('payment_plan_count');
             }
         }
 
@@ -174,6 +203,62 @@ class ChatbotDbContextService
             }
         }
 
+        // ── Teacher lookup (grade/subject/adviser) ──────────────────────────
+        if ($intent === 'teacher_lookup') {
+            $gradeLevel = $intentParams['grade_level'] ?? $this->extractYearLevel($message);
+            $subjectName = $intentParams['subject'] ?? $this->extractSubjectName($message);
+            $scope = $intentParams['scope'] ?? null;
+
+            if ($role === 'admin') {
+                if ($scope === 'adviser') {
+                    $block = $this->getAdviserByGrade($gradeLevel);
+                } else {
+                    $block = $this->getTeacherByGradeSubject($gradeLevel, $subjectName);
+                }
+                if ($block !== '') {
+                    $lines[] = $block;
+                }
+            } elseif ($role === 'student') {
+                if ($userId) {
+                    if (!empty($subjectName)) {
+                        $block = $this->getLoggedInStudentTeacherBySubject($userId, $subjectName);
+                    } else {
+                        $block = $this->getStudentSubjectsWithTeachers($userId);
+                    }
+                    if ($block !== '') {
+                        $lines[] = $block;
+                    }
+                }
+            } else {
+                $lines[] = $this->buildAccessDeniedContext('teacher_lookup');
+            }
+        }
+
+        // ── Student teacher by subject ────────────────────────────────────
+        if ($intent === 'student_teacher_by_subject') {
+            $subjectName = $intentParams['subject'] ?? $this->extractSubjectName($message);
+            if ($role === 'student' && $userId) {
+                $block = $this->getStudentTeacherBySubject($userId, $subjectName);
+                if ($block !== '') {
+                    $lines[] = $block;
+                }
+            } else {
+                $lines[] = $this->buildAccessDeniedContext('student_teacher_by_subject');
+            }
+        }
+
+        // ── Teacher advisory ──────────────────────────────────────────────
+        if ($intent === 'teacher_advisory') {
+            if ($role === 'teacher' && $userId) {
+                $block = $this->getTeacherAdvisory($userId);
+                if ($block !== '') {
+                    $lines[] = $block;
+                }
+            } else {
+                $lines[] = $this->buildAccessDeniedContext('teacher_advisory');
+            }
+        }
+
         // ── Student grades ──────────────────────────────────────────────────
         if ($isGrades) {
             if ($role === 'student' && $userId) {
@@ -183,6 +268,18 @@ class ChatbotDbContextService
                 }
             } else {
                 $lines[] = $this->buildAccessDeniedContext('student_grades');
+            }
+        }
+
+        // ── Student next installment payment ───────────────────────────────
+        if ($intent === 'student_next_payment') {
+            if ($role === 'student' && $userId) {
+                $block = $this->getStudentNextInstallmentPayment($userId);
+                if ($block !== '') {
+                    $lines[] = $block;
+                }
+            } else {
+                $lines[] = $this->buildAccessDeniedContext('student_next_payment');
             }
         }
 
@@ -207,6 +304,18 @@ class ChatbotDbContextService
                 }
             } else {
                 $lines[] = $this->buildAccessDeniedContext('concern_summary');
+            }
+        }
+
+        // ── Negative feedback summary (admin only) ─────────────────────────
+        if ($intent === 'feedback_negative_count') {
+            if ($role === 'admin') {
+                $block = $this->getNegativeFeedbackCount();
+                if ($block !== '') {
+                    $lines[] = $block;
+                }
+            } else {
+                $lines[] = $this->buildAccessDeniedContext('feedback_negative_count');
             }
         }
 
@@ -482,6 +591,30 @@ class ChatbotDbContextService
 
         foreach ($map as $pattern => $label) {
             if (mb_strpos($msg, $pattern) !== false) {
+                return $label;
+            }
+        }
+
+        return null;
+    }
+
+    private function extractSubjectName($msg)
+    {
+        $msg = mb_strtolower($msg);
+        $subjects = [
+            'english' => 'English',
+            'filipino' => 'Filipino',
+            'math' => 'Math',
+            'mathematics' => 'Math',
+            'science' => 'Science',
+            'gmrc' => 'GMRC',
+            'araling panlipunan' => 'Araling Panlipunan',
+            'ap' => 'Araling Panlipunan',
+            'makabansa' => 'Makabansa',
+        ];
+
+        foreach ($subjects as $needle => $label) {
+            if (mb_strpos($msg, $needle) !== false) {
                 return $label;
             }
         }
@@ -1169,6 +1302,445 @@ class ChatbotDbContextService
             ]);
         } catch (Exception $e) {
             error_log('ChatbotDbContextService::getAdminPendingConcernsSummary error: ' . $e->getMessage());
+            return '';
+        }
+    }
+
+    private function getNegativeFeedbackCount()
+    {
+        try {
+            $stmt = $this->db->raw(
+                "SELECT COUNT(*) as total FROM feedback WHERE LOWER(sentiment) = 'negative'",
+                []
+            );
+            $row = $stmt->fetch(PDO::FETCH_ASSOC);
+            $count = (int)($row['total'] ?? 0);
+
+            return $this->formatContextBlock('feedback_negative_count', [
+                'Negative Feedback Count' => $count,
+            ]);
+        } catch (Exception $e) {
+            error_log('ChatbotDbContextService::getNegativeFeedbackCount error: ' . $e->getMessage());
+            return $this->formatContextBlock('feedback_negative_count', [
+                'Result' => 'Negative feedback count is not available because no sentiment field could be read.'
+            ]);
+        }
+    }
+
+    private function getEnrollmentCount($params)
+    {
+        try {
+            $params = is_array($params) ? $params : [];
+            $dateScope = $params['date_scope'] ?? 'all';
+            $status = $params['status'] ?? 'all';
+
+            $where = "WHERE 1=1";
+            $bind = [];
+
+            if ($status !== 'all') {
+                $where .= " AND LOWER(e.status) = ?";
+                $bind[] = mb_strtolower($status);
+            }
+
+            if ($dateScope === 'today') {
+                $where .= " AND DATE(COALESCE(e.submitted_date, e.created_at)) = CURDATE()";
+            } elseif ($dateScope === 'current_period') {
+                $period = $this->getActivePeriod();
+                if ($period && isset($period['school_year'])) {
+                    $periodStmt = $this->db->raw("SELECT id FROM academic_periods WHERE status = 'active' LIMIT 1");
+                    $periodRow = $periodStmt->fetch(PDO::FETCH_ASSOC);
+                    if ($periodRow && !empty($periodRow['id'])) {
+                        $where .= " AND e.academic_period_id = ?";
+                        $bind[] = $periodRow['id'];
+                    }
+                }
+            }
+
+            $sql = "SELECT COUNT(*) as total FROM enrollments e {$where}";
+            $stmt = $this->db->raw($sql, $bind);
+            $row = $stmt->fetch(PDO::FETCH_ASSOC);
+            $count = (int)($row['total'] ?? 0);
+
+            return $this->formatContextBlock('enrollment_count', [
+                'Count' => $count,
+                'Date Scope' => $dateScope,
+                'Status Filter' => $status,
+            ]);
+        } catch (Exception $e) {
+            error_log('ChatbotDbContextService::getEnrollmentCount error: ' . $e->getMessage());
+            return '';
+        }
+    }
+
+    private function getPaymentPlanCount($planType)
+    {
+        try {
+            $planType = $planType ? mb_strtolower((string) $planType) : null;
+            $where = "WHERE pp.status = 'Active'";
+            $bind = [];
+            $label = $planType ?: 'all';
+
+            if ($planType === 'full') {
+                $where .= " AND (LOWER(pp.schedule_type) IN ('full', 'cash', 'one-time', 'onetime', 'full payment')"
+                        . " OR pp.number_of_installments <= 1)";
+            } elseif ($planType === 'installment') {
+                $where .= " AND (LOWER(pp.schedule_type) IN ('monthly', 'quarterly', 'semestral')"
+                        . " OR pp.number_of_installments > 1)";
+            }
+
+            $stmt = $this->db->raw("SELECT COUNT(*) as total FROM payment_plans pp {$where}", $bind);
+            $row = $stmt->fetch(PDO::FETCH_ASSOC);
+            $count = (int)($row['total'] ?? 0);
+
+            $fields = [
+                'Plan Type' => $label,
+                'Count' => $count,
+            ];
+            if ($count === 0) {
+                if ($planType === 'full') {
+                    $fields['Result'] = 'Based on the current payment plan records, I found 0 active full-payment plans. You can verify details on Payment Plans.';
+                } else {
+                    $fields['Result'] = 'May 0 records for that category.';
+                }
+            }
+
+            $contextFields = [
+                'Plan Type' => $fields['Plan Type'],
+                'Count' => $fields['Count'],
+            ];
+            if (isset($fields['Result'])) {
+                $contextFields['Result'] = $fields['Result'];
+            }
+
+            return $this->formatContextBlock('payment_plan_count', $contextFields);
+        } catch (Exception $e) {
+            error_log('ChatbotDbContextService::getPaymentPlanCount error: ' . $e->getMessage());
+            return '';
+        }
+    }
+
+    private function getTeacherByGradeSubject($gradeLevel, $subjectName)
+    {
+        if (empty($gradeLevel) || empty($subjectName)) {
+            return $this->formatContextBlock('teacher_lookup', [
+                'Result' => 'Grade level or subject is missing.'
+            ]);
+        }
+
+        try {
+            $sql = "SELECT DISTINCT CONCAT(u.first_name, ' ', u.last_name) as teacher_name\n"
+                 . "FROM teacher_subject_assignments tsa\n"
+                 . "JOIN subjects s ON tsa.subject_id = s.id\n"
+                 . "JOIN teachers t ON tsa.teacher_id = t.id\n"
+                 . "JOIN users u ON t.user_id = u.id\n"
+                 . "WHERE s.level = ?\n"
+                 . "AND (LOWER(s.name) LIKE ? OR LOWER(s.course_code) LIKE ?)\n"
+                 . "ORDER BY u.last_name";
+            $needle = '%' . mb_strtolower($subjectName) . '%';
+            $stmt = $this->db->raw($sql, [$gradeLevel, $needle, $needle]);
+            $rows = $stmt->fetchAll(PDO::FETCH_ASSOC) ?: [];
+
+            if (empty($rows)) {
+                return $this->formatContextBlock('teacher_lookup', [
+                    'Result' => 'No teacher assignment found for that grade and subject.'
+                ]);
+            }
+
+            $names = array_map(function ($row) {
+                return $row['teacher_name'] ?? '';
+            }, $rows);
+            $names = array_filter($names);
+
+            return $this->formatContextBlock('teacher_lookup', [
+                'Grade Level' => $gradeLevel,
+                'Subject' => $subjectName,
+                'Teacher(s)' => "\n  • " . implode("\n  • ", array_unique($names)),
+            ]);
+        } catch (Exception $e) {
+            error_log('ChatbotDbContextService::getTeacherByGradeSubject error: ' . $e->getMessage());
+            return '';
+        }
+    }
+
+    private function getAdviserByGrade($gradeLevel)
+    {
+        if (empty($gradeLevel)) {
+            return $this->formatContextBlock('teacher_lookup', [
+                'Result' => 'Grade level is missing.'
+            ]);
+        }
+
+        try {
+            $periodStmt = $this->db->raw("SELECT school_year FROM academic_periods WHERE status = 'active' LIMIT 1");
+            $period = $periodStmt->fetch(PDO::FETCH_ASSOC);
+            $schoolYear = $period['school_year'] ?? null;
+
+            $sql = "SELECT CONCAT(u.first_name, ' ', u.last_name) as teacher_name\n"
+                 . "FROM teacher_assignments ta\n"
+                 . "JOIN teachers t ON ta.teacher_id = t.id\n"
+                 . "JOIN users u ON t.user_id = u.id\n"
+                 . "WHERE ta.level = ?";
+            $bind = [$gradeLevel];
+            if ($schoolYear) {
+                $sql .= " AND ta.school_year = ?";
+                $bind[] = $schoolYear;
+            }
+            $sql .= " ORDER BY u.last_name";
+
+            $stmt = $this->db->raw($sql, $bind);
+            $rows = $stmt->fetchAll(PDO::FETCH_ASSOC) ?: [];
+
+            if (empty($rows)) {
+                return $this->formatContextBlock('teacher_lookup', [
+                    'Result' => 'No adviser assignment found for that grade level.'
+                ]);
+            }
+
+            $names = array_map(function ($row) {
+                return $row['teacher_name'] ?? '';
+            }, $rows);
+            $names = array_filter($names);
+
+            return $this->formatContextBlock('teacher_lookup', [
+                'Grade Level' => $gradeLevel,
+                'Adviser' => "\n  • " . implode("\n  • ", array_unique($names)),
+            ]);
+        } catch (Exception $e) {
+            error_log('ChatbotDbContextService::getAdviserByGrade error: ' . $e->getMessage());
+            return '';
+        }
+    }
+
+    private function getStudentTeacherBySubject($userId, $subjectName)
+    {
+        if (empty($subjectName)) {
+            return $this->formatContextBlock('student_teacher_by_subject', [
+                'Result' => 'Subject is missing.'
+            ]);
+        }
+
+        try {
+            $student = $this->getStudentRecordByUserId($userId);
+            if (!$student || empty($student['year_level'])) {
+                return $this->formatContextBlock('student_teacher_by_subject', [
+                    'Result' => 'No student profile found for this account.'
+                ]);
+            }
+
+            $periodStmt = $this->db->raw("SELECT school_year FROM academic_periods WHERE status = 'active' LIMIT 1");
+            $period = $periodStmt->fetch(PDO::FETCH_ASSOC);
+            $schoolYear = $period['school_year'] ?? null;
+
+            $sql = "SELECT DISTINCT CONCAT(u.first_name, ' ', u.last_name) as teacher_name\n"
+                 . "FROM teacher_subject_assignments tsa\n"
+                 . "JOIN subjects s ON tsa.subject_id = s.id\n"
+                 . "JOIN teachers t ON tsa.teacher_id = t.id\n"
+                 . "JOIN users u ON t.user_id = u.id\n"
+                 . "WHERE s.level = ?\n"
+                 . "AND (LOWER(s.name) LIKE ? OR LOWER(s.course_code) LIKE ?)";
+            $bind = [$student['year_level']];
+            $needle = '%' . mb_strtolower($subjectName) . '%';
+            $bind[] = $needle;
+            $bind[] = $needle;
+
+            if ($schoolYear) {
+                $sql .= " AND tsa.school_year = ?";
+                $bind[] = $schoolYear;
+            }
+
+            $sql .= " ORDER BY u.last_name";
+            $stmt = $this->db->raw($sql, $bind);
+            $rows = $stmt->fetchAll(PDO::FETCH_ASSOC) ?: [];
+
+            if (empty($rows)) {
+                return $this->formatContextBlock('student_teacher_by_subject', [
+                    'Subject' => $subjectName,
+                    'Result' => 'No teacher assignment found for that subject.'
+                ]);
+            }
+
+            $names = array_map(function ($row) {
+                return $row['teacher_name'] ?? '';
+            }, $rows);
+            $names = array_filter($names);
+
+            $fields = [
+                'Student Grade Level' => $student['year_level'],
+                'Subject' => $subjectName,
+                'Teacher' => "\n  • " . implode("\n  • ", array_unique($names)),
+            ];
+            if (!empty($student['section_name'])) {
+                $fields['Section'] = $student['section_name'];
+            }
+
+            return $this->formatContextBlock('student_teacher_by_subject', $fields);
+        } catch (Exception $e) {
+            error_log('ChatbotDbContextService::getStudentTeacherBySubject error: ' . $e->getMessage());
+            return '';
+        }
+    }
+
+    private function getLoggedInStudentTeacherBySubject($userId, $subjectName)
+    {
+        if (empty($subjectName)) {
+            return $this->formatContextBlock('teacher_lookup', [
+                'Result' => 'Subject is missing.'
+            ]);
+        }
+
+        try {
+            $student = $this->getStudentRecordByUserId($userId);
+            if (!$student || empty($student['year_level'])) {
+                return $this->formatContextBlock('teacher_lookup', [
+                    'Result' => 'No student profile found for this account.'
+                ]);
+            }
+
+            $periodStmt = $this->db->raw("SELECT school_year FROM academic_periods WHERE status = 'active' LIMIT 1");
+            $period = $periodStmt->fetch(PDO::FETCH_ASSOC);
+            $schoolYear = $period['school_year'] ?? null;
+
+            $sql = "SELECT DISTINCT CONCAT(u.first_name, ' ', u.last_name) as teacher_name\n"
+                 . "FROM teacher_subject_assignments tsa\n"
+                 . "JOIN subjects s ON tsa.subject_id = s.id\n"
+                 . "JOIN teachers t ON tsa.teacher_id = t.id\n"
+                 . "JOIN users u ON t.user_id = u.id\n"
+                 . "WHERE s.level = ?\n"
+                 . "AND (LOWER(s.name) LIKE ? OR LOWER(s.course_code) LIKE ?)";
+            $bind = [$student['year_level']];
+            $needle = '%' . mb_strtolower($subjectName) . '%';
+            $bind[] = $needle;
+            $bind[] = $needle;
+
+            if ($schoolYear) {
+                $sql .= " AND tsa.school_year = ?";
+                $bind[] = $schoolYear;
+            }
+
+            $sql .= " ORDER BY u.last_name";
+            $stmt = $this->db->raw($sql, $bind);
+            $rows = $stmt->fetchAll(PDO::FETCH_ASSOC) ?: [];
+
+            if (empty($rows)) {
+                return $this->formatContextBlock('teacher_lookup', [
+                    'Result' => 'No teacher assignment found for that subject.'
+                ]);
+            }
+
+            $names = array_map(function ($row) {
+                return $row['teacher_name'] ?? '';
+            }, $rows);
+            $names = array_filter($names);
+
+            return $this->formatContextBlock('teacher_lookup', [
+                'Student Grade Level' => $student['year_level'],
+                'Subject' => $subjectName,
+                'Teacher' => "\n  • " . implode("\n  • ", array_unique($names)),
+            ]);
+        } catch (Exception $e) {
+            error_log('ChatbotDbContextService::getLoggedInStudentTeacherBySubject error: ' . $e->getMessage());
+            return '';
+        }
+    }
+
+    private function getTeacherAdvisory($userId)
+    {
+        $teacher = $this->getTeacherRecordByUserId($userId);
+        if (!$teacher || empty($teacher['id'])) {
+            return $this->formatContextBlock('teacher_advisory', [
+                'Result' => 'No teacher profile found for this account.'
+            ]);
+        }
+
+        try {
+            $periodStmt = $this->db->raw("SELECT school_year FROM academic_periods WHERE status = 'active' LIMIT 1");
+            $period = $periodStmt->fetch(PDO::FETCH_ASSOC);
+            $schoolYear = $period['school_year'] ?? null;
+
+            $sql = "SELECT ta.level, ta.school_year, sec.name as section_name\n"
+                 . "FROM teacher_assignments ta\n"
+                 . "LEFT JOIN year_levels yl ON yl.name COLLATE utf8mb4_unicode_ci = ta.level COLLATE utf8mb4_unicode_ci\n"
+                 . "LEFT JOIN year_level_sections yls ON yls.year_level_id = yl.id\n"
+                 . "LEFT JOIN sections sec ON sec.id = yls.section_id\n"
+                 . "WHERE ta.teacher_id = ?";
+            $params = [$teacher['id']];
+            if ($schoolYear) {
+                $sql .= " AND ta.school_year = ?";
+                $params[] = $schoolYear;
+            }
+            $sql .= " ORDER BY ta.school_year DESC LIMIT 1";
+
+            $stmt = $this->db->raw($sql, $params);
+            $row = $stmt->fetch(PDO::FETCH_ASSOC);
+
+            if (!$row) {
+                return $this->formatContextBlock('teacher_advisory', [
+                    'Result' => 'No advisory assignment found for this teacher.'
+                ]);
+            }
+
+            $fields = [
+                'Advisory Level' => $row['level'] ?? 'N/A',
+            ];
+            if (!empty($row['section_name'])) {
+                $fields['Section'] = $row['section_name'];
+            }
+            if (!empty($row['school_year'])) {
+                $fields['School Year'] = $row['school_year'];
+            }
+
+            return $this->formatContextBlock('teacher_advisory', $fields);
+        } catch (Exception $e) {
+            error_log('ChatbotDbContextService::getTeacherAdvisory error: ' . $e->getMessage());
+            return '';
+        }
+    }
+
+    private function getStudentNextInstallmentPayment($userId)
+    {
+        try {
+            $planStmt = $this->db->raw(
+                "SELECT id, schedule_type, total_tuition, total_paid, balance, status\n"
+                . "FROM payment_plans\n"
+                . "WHERE student_id = ?\n"
+                . "ORDER BY created_at DESC\n"
+                . "LIMIT 1",
+                [$userId]
+            );
+            $plan = $planStmt->fetch(PDO::FETCH_ASSOC);
+
+            if (!$plan || empty($plan['id'])) {
+                return $this->formatContextBlock('student_next_payment', [
+                    'Result' => 'No payment plan found for your account.'
+                ]);
+            }
+
+            $instStmt = $this->db->raw(
+                "SELECT installment_number, amount_due, amount_paid, balance, due_date, status\n"
+                . "FROM installments\n"
+                . "WHERE payment_plan_id = ?\n"
+                . "AND status IN ('Pending', 'Partial', 'Overdue')\n"
+                . "ORDER BY installment_number ASC\n"
+                . "LIMIT 1",
+                [$plan['id']]
+            );
+            $installment = $instStmt->fetch(PDO::FETCH_ASSOC);
+
+            if ($installment) {
+                return $this->formatContextBlock('student_next_payment', [
+                    'Installment No.' => $installment['installment_number'] ?? 'N/A',
+                    'Amount Due' => $this->formatCurrency($installment['amount_due'] ?? null),
+                    'Balance' => $this->formatCurrency($installment['balance'] ?? null),
+                    'Due Date' => $installment['due_date'] ?? 'N/A',
+                    'Status' => $installment['status'] ?? 'N/A',
+                ]);
+            }
+
+            return $this->formatContextBlock('student_next_payment', [
+                'Result' => 'No pending installment schedule found. Your remaining balance is ' . $this->formatCurrency($plan['balance'] ?? null) . '.',
+            ]);
+        } catch (Exception $e) {
+            error_log('ChatbotDbContextService::getStudentNextInstallmentPayment error: ' . $e->getMessage());
             return '';
         }
     }

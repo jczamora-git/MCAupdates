@@ -691,10 +691,13 @@ class TeacherController extends Controller
         api_set_json_headers();
         
         try {
-            $assignments = $this->db->table('teacher_assignments')
-                                    ->order_by('school_year', 'DESC')
-                                    ->order_by('level', 'ASC')
-                                    ->get_all();
+            $stmt = $this->db->raw(
+                "SELECT DISTINCT tsa.teacher_id, tsa.school_year, s.level
+                 FROM teacher_subject_assignments tsa
+                 INNER JOIN subjects s ON s.id = tsa.subject_id
+                 ORDER BY tsa.school_year DESC, s.level ASC"
+            );
+            $assignments = $stmt ? ($stmt->fetchAll(PDO::FETCH_ASSOC) ?: []) : [];
             
             echo json_encode([
                 'success' => true,

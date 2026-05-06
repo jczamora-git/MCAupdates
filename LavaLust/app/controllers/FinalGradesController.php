@@ -160,14 +160,27 @@ class FinalGradesController extends Controller
 
                 $teacher_id = $teacher['id'];
 
-                // Verify teacher assignment for this subject/section using raw SQL
-                // Note: academic_period_id is not part of teacher_subjects, only subject + section matters
-                $stmt = $this->db->raw(
-                    "SELECT ts.* FROM teacher_subjects ts
-                     JOIN teacher_subject_sections tss ON ts.id = tss.teacher_subject_id
-                     WHERE ts.teacher_id = ? AND ts.subject_id = ? AND tss.section_id = ?",
-                    [$teacher_id, $subject_id, $section_id]
-                );
+                // Verify teacher assignment for this subject/section
+                $schoolYear = null;
+                $periodRow = $this->db->table('academic_periods')
+                    ->where('id', $academic_period_id)
+                    ->get();
+                if (!empty($periodRow['school_year'])) {
+                    $schoolYear = $periodRow['school_year'];
+                }
+
+                $assignmentSql = "SELECT tsa.id
+                     FROM teacher_subject_assignments tsa
+                     JOIN teacher_subject_sections tss ON tsa.id = tss.teacher_subject_id
+                     WHERE tsa.teacher_id = ? AND tsa.subject_id = ? AND tss.section_id = ?";
+                $assignmentParams = [$teacher_id, $subject_id, $section_id];
+
+                if ($schoolYear) {
+                    $assignmentSql .= " AND tsa.school_year = ?";
+                    $assignmentParams[] = $schoolYear;
+                }
+
+                $stmt = $this->db->raw($assignmentSql, $assignmentParams);
 
                 // LavaLust raw returns PDOStatement; fetch a row to check existence
                 $assignment = null;

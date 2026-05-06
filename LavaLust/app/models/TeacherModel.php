@@ -245,10 +245,21 @@ class TeacherModel extends Model
             $schoolYear = date('Y') . '-' . (date('Y') + 1);
         }
 
-        return $this->db->table('teacher_assignments')
-                        ->where('teacher_id', $teacherId)
-                        ->where('school_year', $schoolYear)
-                        ->get();
+        $sql = "SELECT tsa.teacher_id, tsa.school_year, s.level
+                FROM teacher_subject_assignments tsa
+                INNER JOIN subjects s ON s.id = tsa.subject_id
+                WHERE tsa.teacher_id = ?";
+        $params = [$teacherId];
+
+        if ($schoolYear) {
+            $sql .= " AND tsa.school_year = ?";
+            $params[] = $schoolYear;
+        }
+
+        $sql .= " ORDER BY tsa.school_year DESC, s.level ASC LIMIT 1";
+
+        $stmt = $this->db->raw($sql, $params);
+        return $stmt ? ($stmt->fetch(PDO::FETCH_ASSOC) ?: null) : null;
     }
 
     /**
@@ -256,10 +267,16 @@ class TeacherModel extends Model
      */
     public function get_all_assignments($teacherId)
     {
-        return $this->db->table('teacher_assignments')
-                        ->where('teacher_id', $teacherId)
-                        ->order_by('school_year', 'DESC')
-                        ->get_all();
+        $stmt = $this->db->raw(
+            "SELECT DISTINCT tsa.teacher_id, tsa.school_year, s.level
+             FROM teacher_subject_assignments tsa
+             INNER JOIN subjects s ON s.id = tsa.subject_id
+             WHERE tsa.teacher_id = ?
+             ORDER BY tsa.school_year DESC, s.level ASC",
+            [$teacherId]
+        );
+
+        return $stmt ? ($stmt->fetchAll(PDO::FETCH_ASSOC) ?: []) : [];
     }
 
     /**
@@ -271,31 +288,46 @@ class TeacherModel extends Model
             $schoolYear = date('Y') . '-' . (date('Y') + 1);
         }
 
-        // Check if assignment exists
-        $existing = $this->db->table('teacher_assignments')
-                            ->where('teacher_id', $teacherId)
-                            ->where('school_year', $schoolYear)
-                            ->get();
-
-        if (!empty($existing)) {
-            // Update existing assignment
-            return $this->db->table('teacher_assignments')
-                           ->where('id', $existing['id'])
-                           ->update([
-                               'level' => $level,
-                               'updated_at' => app_now()
-                           ]);
-        } else {
-            // Create new assignment
-            return $this->db->table('teacher_assignments')
-                           ->insert([
-                               'teacher_id' => $teacherId,
-                               'level' => $level,
-                               'school_year' => $schoolYear,
-                               'created_at' => app_now(),
-                               'updated_at' => app_now()
-                           ]);
+        if (empty($level)) {
+            return false;
         }
+
+        $subjects = $this->db->table('subjects')
+                             ->select('id')
+                             ->where('level', $level)
+                             ->where('status', 'active')
+                             ->get_all();
+
+        if (empty($subjects)) {
+            return false;
+        }
+
+        $now = app_now();
+        foreach ($subjects as $subject) {
+            if (empty($subject['id'])) {
+                continue;
+            }
+
+            $existing = $this->db->table('teacher_subject_assignments')
+                                 ->where('teacher_id', $teacherId)
+                                 ->where('subject_id', $subject['id'])
+                                 ->where('school_year', $schoolYear)
+                                 ->get();
+
+            if (!empty($existing)) {
+                continue;
+            }
+
+            $this->db->table('teacher_subject_assignments')->insert([
+                'teacher_id' => $teacherId,
+                'subject_id' => $subject['id'],
+                'school_year' => $schoolYear,
+                'created_at' => $now,
+                'updated_at' => $now
+            ]);
+        }
+
+        return true;
     }
 
     /**
@@ -319,7 +351,7 @@ class TeacherModel extends Model
             $schoolYear = date('Y') . '-' . (date('Y') + 1);
         }
 
-        return $this->db->table('teacher_assignments')
+        return $this->db->table('teacher_subject_assignments')
                         ->where('teacher_id', $teacherId)
                         ->where('school_year', $schoolYear)
                         ->delete();

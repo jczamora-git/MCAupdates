@@ -469,6 +469,7 @@ const ChatbotWidget = () => {
     loadChatEntries(userId)
       .then((entries) => {
         setHistoryMessages(entries.map((e) => ({ role: e.role, content: e.content })));
+        console.log('[Jiji] loaded chat history only');
       })
       .catch(() => {})
       .finally(() => setHasLoadedHistory(true));
@@ -508,31 +509,19 @@ const ChatbotWidget = () => {
       } catch {
         normalizedForRouting = message;
       }
-
-      const walkthroughMatch =
-        findBestMatch(normalizedForRouting, 0.4) ?? findBestMatch(message, 0.4);
-      if (walkthroughMatch) {
-        const { item } = walkthroughMatch;
-        const answerHeader = item.answer?.trim() || "Here are the steps:";
-        const stepLines = item.steps.map((step, index) => `${index + 1}. ${step}`);
-        const fullReply = [answerHeader, ...stepLines].join("\n");
-        const translatedReply = await translate(fullReply);
-
-        setMessages((prev) => [...prev, { role: "assistant", content: translatedReply }]);
-        await saveChatEntries([
-          { id: createCacheEntryId(), userId, role: "user", content: message, createdAt: Date.now() },
-          { id: createCacheEntryId(), userId, role: "assistant", content: translatedReply, createdAt: Date.now() },
-        ]);
-
-        if (!isOpen) setHasNewReply(true);
-        return;
-      }
-
+      const isOnline = navigator.onLine;
+      console.log('[Jiji] sending fresh backend request', {
+        endpoint: API_ENDPOINTS.CHATBOT_MESSAGE,
+        message,
+        role,
+        online: isOnline,
+      });
       const response = await apiPost(API_ENDPOINTS.CHATBOT_MESSAGE, {
         message: normalizedForRouting,
         original_message: message,
-        knowledge_only: !navigator.onLine,
+        knowledge_only: !isOnline,
       });
+      console.log('[Jiji] backend response', response);
       if (!response?.reply) throw new Error("Unexpected chatbot response.");
 
       setMessages((prev) => [...prev, { role: "assistant", content: response.reply }]);
@@ -542,7 +531,10 @@ const ChatbotWidget = () => {
       ]);
       if (!isOpen) setHasNewReply(true);
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Chatbot error.");
+      console.error('[Jiji] backend request failed', err);
+      const fallbackMessage = "Sorry, I could not reach the chatbot server. Please try again.";
+      setMessages((prev) => [...prev, { role: "assistant", content: fallbackMessage }]);
+      setError(fallbackMessage);
     } finally {
       setIsSending(false);
     }

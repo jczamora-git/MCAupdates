@@ -24,6 +24,7 @@ const GradeInput = () => {
 
   // selections / state (declared before effects)
   const [selectedCourse, setSelectedCourse] = useState<string | null>(null);
+  const [selectedGradeLevel, setSelectedGradeLevel] = useState<string | null>(null);
   const [selectedSection, setSelectedSection] = useState<string | null>(null);
   const [selectedSchoolYear, setSelectedSchoolYear] = useState<string | null>(null);
   const [selectedQuarter, setSelectedQuarter] = useState<string | null>(null);
@@ -63,6 +64,58 @@ const GradeInput = () => {
   };
 
   const normalizeLabel = (v: any): string => String(v ?? '').replace(/\s+/g, ' ').trim();
+
+  const normalizeGradeLevel = (value: any): string => {
+    const raw = normalizeLabel(value);
+    if (!raw) return '';
+    const lower = raw.toLowerCase();
+
+    if (lower.startsWith('grade')) {
+      const match = lower.match(/grade\s*(\d+)/);
+      if (match) return `Grade ${Number(match[1])}`;
+    }
+
+    if (lower.startsWith('nursery')) {
+      const match = lower.match(/nursery\s*(\d+)/);
+      if (match) return `Nursery ${Number(match[1])}`;
+      return 'Nursery';
+    }
+
+    if (lower.startsWith('kinder') || lower === 'k') return 'Kindergarten';
+
+    return raw.replace(/\b\w/g, (m) => m.toUpperCase());
+  };
+
+  const getCourseGradeLevel = (course: any): string => {
+    return normalizeGradeLevel(course?.year_level ?? course?.level ?? course?.subject_level ?? course?.yearLevel ?? '');
+  };
+
+  const gradeLevelSortValue = (label: string): number => {
+    const order = [
+      'Nursery 1',
+      'Nursery 2',
+      'Kindergarten',
+      'Grade 1',
+      'Grade 2',
+      'Grade 3',
+      'Grade 4',
+      'Grade 5',
+      'Grade 6',
+    ];
+    const index = order.indexOf(label);
+    if (index >= 0) return index;
+    const gradeMatch = label.match(/Grade\s*(\d+)/i);
+    if (gradeMatch) return 100 + Number(gradeMatch[1]);
+    return 1000;
+  };
+
+  const formatCourseLabel = (course: any, role: string | undefined): string => {
+    const code = normalizeLabel(course?.code);
+    const title = normalizeLabel(course?.title);
+    const teacher = normalizeLabel(course?.teacher || 'Unassigned');
+    if (role === 'admin' && teacher) return `${code} - ${title} (${teacher})`;
+    return `${code} - ${title}`;
+  };
 
   const formatStudentDisplayName = (student: any): string => {
     const lastName = normalizeLabel(student?.last_name ?? student?.lastname ?? '');
@@ -128,6 +181,23 @@ const GradeInput = () => {
       return String(a.student_code ?? a.id ?? '').localeCompare(String(b.student_code ?? b.id ?? ''), undefined, { sensitivity: 'base' });
     });
   };
+
+  const gradeLevelOptions = useMemo(() => {
+    const levels = new Set<string>();
+    (courses || []).forEach((course: any) => {
+      const level = getCourseGradeLevel(course);
+      if (level) levels.add(level);
+    });
+
+    return Array.from(levels)
+      .sort((a, b) => gradeLevelSortValue(a) - gradeLevelSortValue(b))
+      .map((label) => ({ label, value: label }));
+  }, [courses]);
+
+  const filteredCourses = useMemo(() => {
+    if (!selectedGradeLevel) return courses;
+    return courses.filter((course: any) => getCourseGradeLevel(course) === selectedGradeLevel);
+  }, [courses, selectedGradeLevel]);
 
   const buildScoreMap = (scoreRows: any[]) => {
     const map: Record<string, Record<string, number>> = {};
@@ -286,6 +356,78 @@ const GradeInput = () => {
 
     const score = gradingScoreMap[String(item?.id ?? '')]?.[String(studentId)];
     return Number.isFinite(score) ? Number(score) : 0;
+  };
+
+  const getRawQuarterlyScore = (student: any, item: any) => {
+    const isActivityItem = item?.source_type === 'activity' || (!!item?.id && !item?.source_type && item?.type);
+    if (isActivityItem) {
+      const activityId = item?.source_activity_id ?? item?.activity_id ?? item?.id;
+      const gradeRecord = (student?.grades ?? []).find((g: any) => String(g.activity_id) === String(activityId));
+      if (!gradeRecord) return { exists: false, value: null };
+      return { exists: true, value: gradeRecord.grade };
+    }
+
+    const itemScores = gradingScoreMap[String(item?.id ?? '')] ?? {};
+    if (!Object.prototype.hasOwnProperty.call(itemScores, String(student?.id))) {
+      return { exists: false, value: null };
+    }
+
+    return { exists: true, value: itemScores[String(student?.id)] };
+  };
+
+  const isValidQuarterlyScore = (value: any) => {
+    if (value === null || value === undefined) return false;
+    if (String(value).trim() === '') return false;
+    return Number.isFinite(Number(value));
+  };
+
+  const getQuarterlyAssessmentSubmissionStatus = () => {
+    const totalStudents = students.length;
+    if (!selectedCourse || !selectedSection || !selectedPeriodId) {
+      return { canSubmit: false, reason: 'Please select a course, section, and academic period first.', missingCount: totalStudents, totalStudents };
+    }
+
+    if (totalStudents === 0) {
+      return { canSubmit: false, reason: 'No students found for this course/section.', missingCount: 0, totalStudents };
+    }
+
+    if (!Array.isArray(quarterlyItems) || quarterlyItems.length === 0) {
+      return { canSubmit: false, reason: 'Add and grade a Quarterly Assessment before submitting grades.', missingCount: totalStudents, totalStudents };
+    }
+
+    const totalQuarterlyHps = quarterlyItems.reduce((sum, item) => sum + Number(item?.max_score ?? 0), 0);
+    if (totalQuarterlyHps <= 0) {
+      return { canSubmit: false, reason: 'Quarterly Assessment has no valid HPS.', missingCount: totalStudents, totalStudents };
+    }
+
+    const missingStudents = new Set<string>();
+    let validScores = 0;
+
+    students.forEach((student) => {
+      quarterlyItems.forEach((item) => {
+        const raw = getRawQuarterlyScore(student, item);
+        if (!raw.exists || !isValidQuarterlyScore(raw.value)) {
+          missingStudents.add(String(student.id));
+          return;
+        }
+        validScores += 1;
+      });
+    });
+
+    if (validScores === 0) {
+      return { canSubmit: false, reason: 'Quarterly Assessment has not been graded yet.', missingCount: totalStudents, totalStudents };
+    }
+
+    if (missingStudents.size > 0) {
+      return {
+        canSubmit: false,
+        reason: 'Some students are missing Quarterly Assessment scores. Complete all exam scores before submitting.',
+        missingCount: missingStudents.size,
+        totalStudents,
+      };
+    }
+
+    return { canSubmit: true, reason: '', missingCount: 0, totalStudents };
   };
 
   // Helper to calculate weighted scores using DepEd component weights
@@ -637,12 +779,24 @@ const GradeInput = () => {
       return;
     }
 
+    const quarterlyStatus = getQuarterlyAssessmentSubmissionStatus();
+    if (!quarterlyStatus.canSubmit) {
+      alert(quarterlyStatus.reason || 'Quarterly Assessment scores are required before submitting grades.');
+      return;
+    }
+
     setSubmitResult(null);
     setSubmitModalOpen(true);
   };
 
   const confirmSubmitGrades = async () => {
     if (!selectedCourse || !selectedSection || !selectedPeriodId) return;
+
+    const quarterlyStatus = getQuarterlyAssessmentSubmissionStatus();
+    if (!quarterlyStatus.canSubmit) {
+      alert(quarterlyStatus.reason || 'Quarterly Assessment scores are required before submitting grades.');
+      return;
+    }
 
     try {
       setLoading((l) => ({ ...l, submitting: true }));
@@ -837,20 +991,11 @@ const GradeInput = () => {
             console.log('Fetched courses:', mapped); // Debug log
             setCourses(mapped);
 
-            if (mapped.length > 0) {
-              setSelectedCourse(String(mapped[0].id));
-              setCourseInfo({
-                code: mapped[0].code ?? '',
-                title: mapped[0].title ?? '',
-                teacher: mapped[0].teacher ?? (user?.name ?? ''),
-                section: mapped[0].sections && mapped[0].sections[0] ? mapped[0].sections[0].name : ''
-              });
-              setSections(mapped[0].sections ?? []);
-              if (mapped[0].sections && mapped[0].sections.length > 0) {
-                setSelectedSection(String(mapped[0].sections[0].id));
-              } else {
-                setSelectedSection(null);
-              }
+            if (mapped.length === 0) {
+              setSelectedCourse(null);
+              setSections([]);
+              setSelectedSection(null);
+              setCourseInfo({ code: '', title: '', teacher: '', section: '' });
             }
           } else if (mounted) {
             setCourses([]);
@@ -867,11 +1012,11 @@ const GradeInput = () => {
             if (mounted && Array.isArray(slist) && slist.length > 0) {
               const mapped = slist.map((s: any) => ({ id: s.id, code: normalizeLabel(s.course_code), title: normalizeLabel(s.course_name), semester: s.semester ?? null, year_level: normalizeLabel(s.year_level ?? ''), sections: Array.isArray(s.sections) ? s.sections.map((x: any) => ({ id: x.id, name: normalizeLabel(x.name) })) : [] }));
               setCourses(mapped);
-              if (mapped.length > 0) {
-                setSelectedCourse(String(mapped[0].id));
-                setCourseInfo({ code: mapped[0].code ?? '', title: mapped[0].title ?? '', teacher: user?.name ?? '', section: mapped[0].sections && mapped[0].sections[0] ? mapped[0].sections[0].name : '' });
-                setSections(mapped[0].sections ?? []);
-                if (mapped[0].sections && mapped[0].sections.length > 0) setSelectedSection(String(mapped[0].sections[0].id));
+              if (mapped.length === 0) {
+                setSelectedCourse(null);
+                setSections([]);
+                setSelectedSection(null);
+                setCourseInfo({ code: '', title: '', teacher: '', section: '' });
               }
             }
           } catch (e) {}
@@ -883,6 +1028,47 @@ const GradeInput = () => {
     fetchInitial();
     return () => { mounted = false; };
   }, [user, isAuthenticated]);
+
+  useEffect(() => {
+    if (!courses.length) {
+      setSelectedGradeLevel(null);
+      return;
+    }
+    if (!selectedGradeLevel && gradeLevelOptions.length > 0) {
+      setSelectedGradeLevel(gradeLevelOptions[0].value);
+    }
+  }, [courses, gradeLevelOptions, selectedGradeLevel]);
+
+  useEffect(() => {
+    if (!selectedGradeLevel) return;
+    setStudents([]);
+    setActivities([]);
+    setGradingItems([]);
+    setGradingScoreMap({});
+
+    if (filteredCourses.length === 0) {
+      setSelectedCourse(null);
+      setSections([]);
+      setSelectedSection(null);
+      setCourseInfo({ code: '', title: '', teacher: '', section: '' });
+      return;
+    }
+
+    const firstCourse = filteredCourses[0];
+    setSelectedCourse(String(firstCourse.id));
+    setSections(firstCourse.sections ?? []);
+    if (firstCourse.sections && firstCourse.sections.length > 0) {
+      setSelectedSection(String(firstCourse.sections[0].id));
+    } else {
+      setSelectedSection(null);
+    }
+    setCourseInfo({
+      code: normalizeLabel(firstCourse.code),
+      title: normalizeLabel(firstCourse.title),
+      teacher: normalizeLabel(firstCourse.teacher ?? (user?.name ?? '')),
+      section: firstCourse.sections && firstCourse.sections[0] ? normalizeLabel(firstCourse.sections[0].name) : '',
+    });
+  }, [selectedGradeLevel, filteredCourses, user]);
 
   // When academicPeriods list loads, sync selectedSchoolYear → selectedQuarter → selectedPeriodId
   useEffect(() => {
@@ -1096,6 +1282,16 @@ const GradeInput = () => {
   const writtenSlots = Math.max(8, writtenItems.length);
   const performanceSlots = Math.max(5, performanceItems.length);
   const totalGradeColumns = 1 + (writtenSlots + 3) + (performanceSlots + 3) + 3 + (showQuarterGrade ? 2 : 0);
+  const quarterlySubmissionStatus = useMemo(
+    () => getQuarterlyAssessmentSubmissionStatus(),
+    [quarterlyItems, students, gradingScoreMap, selectedCourse, selectedSection, selectedPeriodId]
+  );
+  const quarterlyHelperText = !quarterlySubmissionStatus.canSubmit
+    ? (quarterlySubmissionStatus.missingCount > 0
+      ? `Missing Quarterly Assessment scores for ${quarterlySubmissionStatus.missingCount} student(s).`
+      : (quarterlySubmissionStatus.reason || 'Quarterly Assessment is required before submission.'))
+    : '';
+  const showQuarterlyHelper = !!(submissionEnabled && !quarterlySubmissionStatus.canSubmit && selectedCourse && selectedSection && selectedPeriodId);
 
   return (
     <DashboardLayout>
@@ -1106,32 +1302,37 @@ const GradeInput = () => {
             <h1 className="text-3xl font-bold mb-2">Class Record</h1>
             <p className="text-muted-foreground">Manage and input student grades</p>
           </div>
-          <div className="flex items-center gap-2">
-            {/* <Button variant="outline" onClick={handleExportClassRecord}>
-              <FileSpreadsheet className="h-4 w-4 mr-2" />
-              Export CSV
-            </Button> */}
-            {/* <Button variant="outline" onClick={handleExportClassRecordExcel}>
-              <FileSpreadsheet className="h-4 w-4 mr-2" />
-              Export Excel
-            </Button> */}
-            <Button
-              onClick={handleSubmitGrades}
-              disabled={loading.submitting || submissionControlLoading || !submissionEnabled}
-              className="bg-green-600 hover:bg-green-700"
-            >
-              {loading.submitting ? <Loader2 className="h-4 w-4 mr-2 animate-spin" /> : <Send className="h-4 w-4 mr-2" />}
-              {loading.submitting ? 'Submitting...' : submissionEnabled ? 'Submit Grades' : 'Submission Disabled'}
-            </Button>
-            {user?.role === 'admin' && (
-              <div className="flex items-center gap-2 pl-2 border-l">
-                <Label className="text-xs text-muted-foreground">Allow Submission</Label>
-                <Switch
-                  checked={submissionEnabled}
-                  disabled={submissionControlSaving || submissionControlLoading}
-                  onCheckedChange={handleToggleSubmissionControl}
-                />
-              </div>
+          <div className="flex flex-col items-end gap-1">
+            <div className="flex items-center gap-2">
+              {/* <Button variant="outline" onClick={handleExportClassRecord}>
+                <FileSpreadsheet className="h-4 w-4 mr-2" />
+                Export CSV
+              </Button> */}
+              {/* <Button variant="outline" onClick={handleExportClassRecordExcel}>
+                <FileSpreadsheet className="h-4 w-4 mr-2" />
+                Export Excel
+              </Button> */}
+              <Button
+                onClick={handleSubmitGrades}
+                disabled={loading.submitting || submissionControlLoading || !submissionEnabled || !quarterlySubmissionStatus.canSubmit}
+                className="bg-green-600 hover:bg-green-700"
+              >
+                {loading.submitting ? <Loader2 className="h-4 w-4 mr-2 animate-spin" /> : <Send className="h-4 w-4 mr-2" />}
+                {loading.submitting ? 'Submitting...' : submissionEnabled ? 'Submit Grades' : 'Submission Disabled'}
+              </Button>
+              {user?.role === 'admin' && (
+                <div className="flex items-center gap-2 pl-2 border-l">
+                  <Label className="text-xs text-muted-foreground">Allow Submission</Label>
+                  <Switch
+                    checked={submissionEnabled}
+                    disabled={submissionControlSaving || submissionControlLoading}
+                    onCheckedChange={handleToggleSubmissionControl}
+                  />
+                </div>
+              )}
+            </div>
+            {showQuarterlyHelper && quarterlyHelperText && (
+              <p className="text-xs text-muted-foreground">{quarterlyHelperText}</p>
             )}
           </div>
         </div>
@@ -1139,7 +1340,7 @@ const GradeInput = () => {
         {/* Course Selection and Info */}
         <Card className="mb-6">
           <CardContent className="pt-6">
-            <div className="grid grid-cols-1 md:grid-cols-4 gap-4 mb-4">
+            <div className="grid grid-cols-1 md:grid-cols-5 gap-4 mb-4">
               <div>
                 <Label className="text-xs text-muted-foreground">Academic Year</Label>
                 <Select value={selectedSchoolYear ?? undefined} onValueChange={(v) => {
@@ -1191,6 +1392,19 @@ const GradeInput = () => {
                 </Select>
               </div>
               <div>
+                <Label className="text-xs text-muted-foreground">Grade Level</Label>
+                <Select value={selectedGradeLevel ?? undefined} onValueChange={(v) => setSelectedGradeLevel(v)}>
+                  <SelectTrigger className="h-9">
+                    <SelectValue placeholder="Select grade level" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {gradeLevelOptions.map((level) => (
+                      <SelectItem hideIndicator key={level.value} value={level.value}>{level.label}</SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+              <div>
                 <Label className="text-xs text-muted-foreground">Course</Label>
                 <Select value={selectedCourse ?? undefined} onValueChange={(v) => {
                   logSelectChange('course', v);
@@ -1200,9 +1414,13 @@ const GradeInput = () => {
                     <SelectValue placeholder="Select course" />
                   </SelectTrigger>
                   <SelectContent>
-                    {courses.map((c) => (
-                      <SelectItem hideIndicator key={c.id} value={String(c.id)}>{`${normalizeLabel(c.code)} - ${normalizeLabel(c.title)} (${normalizeLabel(c.teacher || 'Unassigned')})`}</SelectItem>
-                    ))}
+                    {filteredCourses.length > 0 ? (
+                      filteredCourses.map((c) => (
+                        <SelectItem hideIndicator key={c.id} value={String(c.id)}>{formatCourseLabel(c, user?.role)}</SelectItem>
+                      ))
+                    ) : (
+                      <SelectItem hideIndicator disabled value="no-courses">No courses available</SelectItem>
+                    )}
                   </SelectContent>
                 </Select>
               </div>
@@ -1216,9 +1434,13 @@ const GradeInput = () => {
                     <SelectValue placeholder="Select section" />
                   </SelectTrigger>
                   <SelectContent>
-                    {sections.map((s) => (
-                      <SelectItem hideIndicator key={s.id} value={String(s.id)}>{normalizeLabel(s.name)}</SelectItem>
-                    ))}
+                    {sections.length > 0 ? (
+                      sections.map((s) => (
+                        <SelectItem hideIndicator key={s.id} value={String(s.id)}>{normalizeLabel(s.name)}</SelectItem>
+                      ))
+                    ) : (
+                      <SelectItem hideIndicator disabled value="no-sections">No sections available</SelectItem>
+                    )}
                   </SelectContent>
                 </Select>
               </div>
@@ -1229,7 +1451,11 @@ const GradeInput = () => {
               <div className="flex items-center justify-between">
                 <div>
                   <p className="font-semibold text-lg">{courseInfo.code} - {courseInfo.title}</p>
-                  <p className="text-sm text-muted-foreground">Teacher: {courseInfo.teacher} | Section: {courseInfo.section}</p>
+                  {user?.role === 'admin' ? (
+                    <p className="text-sm text-muted-foreground">Teacher: {courseInfo.teacher} | Section: {courseInfo.section}</p>
+                  ) : (
+                    <p className="text-sm text-muted-foreground">Section: {courseInfo.section}</p>
+                  )}
                 </div>
                 <div className="text-right">
                   <Badge variant="outline" className="text-xs">

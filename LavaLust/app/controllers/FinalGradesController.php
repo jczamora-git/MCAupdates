@@ -189,6 +189,147 @@ class FinalGradesController extends Controller
                 }
             }
 
+            $studentIds = array_values(array_unique(array_filter(array_map(function ($g) {
+                return isset($g['student_id']) ? (int)$g['student_id'] : 0;
+            }, $grades), fn($id) => $id > 0)));
+
+            if (empty($studentIds)) {
+                http_response_code(400);
+                echo json_encode([
+                    'success' => false,
+                    'message' => 'No students provided for grade submission'
+                ]);
+                return;
+            }
+
+            $quarterValues = array_values(array_filter(array_unique([
+                isset($quarterRaw) ? trim((string)$quarterRaw) : null,
+                $quarter
+            ]), fn($v) => $v !== null && $v !== ''));
+            $params = [(int)$subject_id, (int)$section_id, (int)$academic_period_id];
+            $quarterSql = ' AND (quarter IS NULL OR quarter = \'\')';
+            if (!empty($quarterValues)) {
+                $qPlaceholders = implode(',', array_fill(0, count($quarterValues), '?'));
+                $quarterSql = " AND (quarter IN ($qPlaceholders) OR quarter IS NULL OR quarter = '')";
+                $params = array_merge($params, $quarterValues);
+            }
+
+            $quarterlyStmt = $this->db->raw(
+                "SELECT id, source_type, source_activity_id, max_score
+                 FROM grading_input_items
+                 WHERE subject_id = ? AND section_id = ? AND academic_period_id = ?
+                   AND component = 'quarterly' AND is_active = 1" . $quarterSql,
+                $params
+            );
+            $quarterlyItems = $quarterlyStmt->fetchAll(PDO::FETCH_ASSOC) ?: [];
+
+            if (empty($quarterlyItems)) {
+                http_response_code(400);
+                echo json_encode([
+                    'success' => false,
+                    'message' => 'Quarterly Assessment scores are required before submitting grades.'
+                ]);
+                return;
+            }
+
+            $quarterlyHps = array_sum(array_map(fn($i) => (float)($i['max_score'] ?? 0), $quarterlyItems));
+            if ($quarterlyHps <= 0) {
+                http_response_code(400);
+                echo json_encode([
+                    'success' => false,
+                    'message' => 'Quarterly Assessment scores are required before submitting grades.'
+                ]);
+                return;
+            }
+
+            $manualItemIds = array_values(array_unique(array_map(
+                fn($i) => (int)$i['id'],
+                array_filter($quarterlyItems, fn($i) => (($i['source_type'] ?? '') !== 'activity'))
+            )));
+            $activityIds = array_values(array_unique(array_map(
+                fn($i) => (int)$i['source_activity_id'],
+                array_filter($quarterlyItems, fn($i) => (($i['source_type'] ?? '') === 'activity') && !empty($i['source_activity_id']))
+            )));
+
+            $manualScoreMap = [];
+            if (!empty($manualItemIds)) {
+                $itemPlaceholders = implode(',', array_fill(0, count($manualItemIds), '?'));
+                $studentPlaceholders = implode(',', array_fill(0, count($studentIds), '?'));
+                $scoreStmt = $this->db->raw(
+                    "SELECT grading_input_item_id, student_id, score
+                     FROM grading_input_scores
+                     WHERE grading_input_item_id IN ($itemPlaceholders)
+                       AND student_id IN ($studentPlaceholders)",
+                    array_merge($manualItemIds, $studentIds)
+                );
+                $scoreRows = $scoreStmt ? ($scoreStmt->fetchAll(PDO::FETCH_ASSOC) ?: []) : [];
+                foreach ($scoreRows as $row) {
+                    $iid = (int)$row['grading_input_item_id'];
+                    $sid = (int)$row['student_id'];
+                    if (!isset($manualScoreMap[$iid])) $manualScoreMap[$iid] = [];
+                    $manualScoreMap[$iid][$sid] = $row['score'];
+                }
+            }
+
+            $activityScoreMap = [];
+            if (!empty($activityIds)) {
+                $actPlaceholders = implode(',', array_fill(0, count($activityIds), '?'));
+                $studentPlaceholders = implode(',', array_fill(0, count($studentIds), '?'));
+                $actStmt = $this->db->raw(
+                    "SELECT activity_id, student_id, grade
+                     FROM activity_grades
+                     WHERE activity_id IN ($actPlaceholders)
+                       AND student_id IN ($studentPlaceholders)",
+                    array_merge($activityIds, $studentIds)
+                );
+                $actRows = $actStmt ? ($actStmt->fetchAll(PDO::FETCH_ASSOC) ?: []) : [];
+                foreach ($actRows as $row) {
+                    $aid = (int)$row['activity_id'];
+                    $sid = (int)$row['student_id'];
+                    if (!isset($activityScoreMap[$aid])) $activityScoreMap[$aid] = [];
+                    $activityScoreMap[$aid][$sid] = $row['grade'];
+                }
+            }
+
+            $missingStudents = [];
+            $validScoreCount = 0;
+            foreach ($studentIds as $sid) {
+                foreach ($quarterlyItems as $item) {
+                    $sourceType = $item['source_type'] ?? '';
+                    if ($sourceType === 'activity' && !empty($item['source_activity_id'])) {
+                        $activityId = (int)$item['source_activity_id'];
+                        if (!isset($activityScoreMap[$activityId]) || !array_key_exists($sid, $activityScoreMap[$activityId])) {
+                            $missingStudents[$sid] = true;
+                            continue;
+                        }
+                        $score = $activityScoreMap[$activityId][$sid];
+                    } else {
+                        $itemId = (int)$item['id'];
+                        if (!isset($manualScoreMap[$itemId]) || !array_key_exists($sid, $manualScoreMap[$itemId])) {
+                            $missingStudents[$sid] = true;
+                            continue;
+                        }
+                        $score = $manualScoreMap[$itemId][$sid];
+                    }
+
+                    if ($score === null || $score === '' || !is_numeric($score)) {
+                        $missingStudents[$sid] = true;
+                        continue;
+                    }
+
+                    $validScoreCount++;
+                }
+            }
+
+            if ($validScoreCount === 0 || !empty($missingStudents)) {
+                http_response_code(400);
+                echo json_encode([
+                    'success' => false,
+                    'message' => 'Quarterly Assessment scores are required before submitting grades.'
+                ]);
+                return;
+            }
+
             $usedTx = null;
             if (method_exists($this->db, 'transaction')) {
                 $this->db->transaction();

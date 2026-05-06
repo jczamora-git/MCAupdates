@@ -199,8 +199,13 @@ const RFIDAttendance = () => {
       image_base64?: string | null;
     }) => {
       try {
+        console.log("[RFID] submitting scan", { rfid_code: data.rfid_code, type: data.type });
         const response = await apiPost(API_ENDPOINTS.RFID_SCANS, data);
-        return response.data as RFIDScan;
+        console.log("[RFID] scan response", response);
+        if (response?.success === false) {
+          throw new Error(response?.message || "RFID scan failed");
+        }
+        return (response?.data ?? response) as RFIDScan;
       } catch (error: any) {
         const errorMessage = String(error?.message || "");
         if (errorMessage.toLowerCase().includes("already recorded")) {
@@ -211,6 +216,17 @@ const RFIDAttendance = () => {
       }
     },
     onSuccess: (data) => {
+      if (!data || !data.status) {
+        setSmsModalOpen(false);
+        showToast({
+          title: "Error",
+          description: "Invalid scan response from server.",
+          variant: "destructive",
+        });
+        setRfidInput("");
+        setTimeout(() => rfidInputRef.current?.focus(), 50);
+        return;
+      }
       const smsStatus = data?.sms_status as string | undefined;
       const smsMessage = data?.sms_message as string | undefined;
 
@@ -337,6 +353,9 @@ const RFIDAttendance = () => {
           variant: "destructive",
         });
       }
+
+      setRfidInput("");
+      setTimeout(() => rfidInputRef.current?.focus(), 50);
     },
   });
 
@@ -564,6 +583,9 @@ const RFIDAttendance = () => {
       // Process Enter key to submit scan
       if (e.key === "Enter" && rfidInput.trim()) {
         e.preventDefault();
+        if (isPending) {
+          return;
+        }
         const trimmedCode = rfidInput.trim();
 
         if (blockedRfids[trimmedCode]) {

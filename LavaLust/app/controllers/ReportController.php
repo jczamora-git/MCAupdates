@@ -494,6 +494,34 @@ class ReportController extends Controller
                 $logoDataUri = get_image_data_uri('public/EduTrack_Logo.png');
             }
 
+            if ($reportType === 'studentGrade' && strtolower((string)($input['studentGradeScope'] ?? '')) === 'individual') {
+                $studentInfo = is_array($input['studentGradeStudent'] ?? null) ? $input['studentGradeStudent'] : [];
+                $period = $this->db->table('academic_periods')->where('status', 'active')->get();
+                if (!$period) {
+                    $period = $this->db->table('academic_periods')->order_by('id', 'DESC')->get();
+                }
+
+                $html = $this->build_individual_student_grade_report_card_html([
+                    'student' => $studentInfo,
+                    'rows' => $rows,
+                    'schoolYear' => $period['school_year'] ?? '',
+                    'logoDataUri' => $logoDataUri,
+                ]);
+
+                $studentId = preg_replace('/[^A-Za-z0-9_-]+/', '_', (string)($studentInfo['studentId'] ?? 'Student'));
+                $filename = 'MCA_Student_Grade_Report_' . ($studentId ?: 'Student') . '_' . date('Y-m-d');
+                $pdf = generate_pdf_from_html($html, $filename, [
+                    'format' => 'Legal',
+                    'margin_left' => 12,
+                    'margin_right' => 12,
+                    'margin_top' => 12,
+                    'margin_bottom' => 12,
+                ]);
+
+                output_pdf_to_browser($pdf, $filename, true);
+                return;
+            }
+
             $html = build_admin_report_html([
                 'reportTitle' => $reportTitle,
                 'reportTypeLabel' => $reportTypeLabel,
@@ -528,6 +556,174 @@ class ReportController extends Controller
                 'message' => 'Error generating admin report PDF: ' . $e->getMessage()
             ]);
         }
+    }
+
+    private function build_individual_student_grade_report_card_html($payload)
+    {
+        $student = is_array($payload['student'] ?? null) ? $payload['student'] : [];
+        $rows = is_array($payload['rows'] ?? null) ? $payload['rows'] : [];
+        $schoolYear = (string)($payload['schoolYear'] ?? '');
+        $logoDataUri = (string)($payload['logoDataUri'] ?? '');
+        $esc = function ($value) {
+            return htmlspecialchars((string)($value ?? ''), ENT_QUOTES, 'UTF-8');
+        };
+        $gradeDisplay = function ($value) {
+            if ($value === null || $value === '' || $value === '-') return '-';
+            return is_numeric($value) ? rtrim(rtrim(number_format((float)$value, 2, '.', ''), '0'), '.') : (string)$value;
+        };
+
+        $subjectRows = [];
+        $finalGrades = [];
+        foreach ($rows as $row) {
+            if (!is_array($row)) continue;
+            $available = [];
+            foreach (['1st Quarter', '2nd Quarter', '3rd Quarter', '4th Quarter'] as $quarterKey) {
+                if (isset($row[$quarterKey]) && $row[$quarterKey] !== '-' && is_numeric($row[$quarterKey])) {
+                    $available[] = (float)$row[$quarterKey];
+                }
+            }
+            $final = is_numeric($row['Final Grade'] ?? null)
+                ? (float)$row['Final Grade']
+                : (!empty($available) ? array_sum($available) / count($available) : null);
+            if ($final !== null) $finalGrades[] = $final;
+            $subjectRows[] = [
+                'subject' => $row['Subject'] ?? $row['Subject Code'] ?? '-',
+                'q1' => $row['1st Quarter'] ?? '-',
+                'q2' => $row['2nd Quarter'] ?? '-',
+                'q3' => $row['3rd Quarter'] ?? '-',
+                'q4' => $row['4th Quarter'] ?? '-',
+                'final' => $final,
+                'remarks' => $final !== null ? ($final >= 75 ? 'PASSED' : 'FAILED') : '-',
+            ];
+        }
+
+        $generalAverage = !empty($finalGrades) ? array_sum($finalGrades) / count($finalGrades) : null;
+        $generalRemarks = $generalAverage !== null ? ($generalAverage >= 75 ? 'PASSED' : 'FAILED') : '-';
+
+        ob_start();
+        ?>
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <style>
+        body { font-family: "Times New Roman", serif; color: #000; font-size: 11px; }
+        .header { border-bottom: 2px solid #1f2a44; padding-bottom: 10px; margin-bottom: 10px; }
+        .header-table { width: 100%; border-collapse: collapse; }
+        .logo-cell { width: 20%; vertical-align: middle; }
+        .logo { max-height: 60px; width: auto; display: inline-block; }
+        .school-name { text-align: center; font-size: 14px; font-weight: bold; letter-spacing: 0.5px; }
+        .school-sub { text-align: center; font-size: 11px; color: #444; }
+        h1 { text-align: center; font-size: 18px; font-weight: bold; margin: 14px 0 6px; letter-spacing: .5px; }
+        .divider { border-top: 1px solid #1f2a44; margin: 10px 0; }
+        .info { width: 100%; border-collapse: collapse; margin-bottom: 14px; }
+        .info td { padding: 4px 6px; vertical-align: bottom; }
+        .line { border-bottom: 1px solid #000; min-height: 14px; display: inline-block; width: 100%; }
+        .section-title { text-align: center; font-weight: bold; margin: 10px 0 5px; font-size: 12px; }
+        table.grades, table.scale { width: 100%; border-collapse: collapse; }
+        table.grades th, table.grades td, table.scale th, table.scale td { border: 1px solid #000; padding: 5px 6px; }
+        table.grades th, table.scale th { font-weight: bold; text-align: center; }
+        table.grades td { text-align: center; }
+        table.grades td.area { text-align: left; }
+        .average-row td { font-weight: bold; }
+        .no-grades { border: 1px solid #000; padding: 12px; text-align: center; margin-bottom: 12px; }
+        .scale { margin-top: 8px; font-size: 10px; }
+        .footer { margin-top: 16px; border-top: 1px solid #000; padding-top: 6px; text-align: center; font-size: 10px; }
+    </style>
+</head>
+<body>
+    <div class="header">
+        <table class="header-table">
+            <tr>
+                <td class="logo-cell">
+                    <?php if ($logoDataUri !== ''): ?>
+                        <img src="<?= $esc($logoDataUri) ?>" alt="MCA Logo" class="logo" />
+                    <?php else: ?>
+                        <div style="font-weight:bold; font-size:12px;">MCA</div>
+                    <?php endif; ?>
+                </td>
+                <td>
+                    <div class="school-name">Maranatha Christian Academy Foundation</div>
+                    <div class="school-sub">Calapan City, Inc.</div>
+                    <div class="school-sub">Official Administrative Report</div>
+                </td>
+                <td class="logo-cell"></td>
+            </tr>
+        </table>
+    </div>
+
+    <h1>STUDENT GRADE REPORT</h1>
+    <div class="divider"></div>
+
+    <table class="info">
+        <tr><td style="width: 12%;">Name:</td><td colspan="5"><span class="line"><?= $esc($student['name'] ?? '') ?></span></td></tr>
+        <tr>
+            <td>Age:</td><td style="width: 18%;"><span class="line">&nbsp;</span></td>
+            <td style="width: 10%;">Sex:</td><td style="width: 18%;"><span class="line"><?= $esc($student['gender'] ?? '') ?></span></td>
+            <td style="width: 10%;">LRN:</td><td><span class="line">&nbsp;</span></td>
+        </tr>
+        <tr>
+            <td>Grade:</td><td><span class="line"><?= $esc($student['yearLevel'] ?? '') ?></span></td>
+            <td>Section:</td><td colspan="3"><span class="line"><?= $esc($student['sectionName'] ?? '') ?></span></td>
+        </tr>
+        <tr><td>School Year:</td><td colspan="5"><span class="line"><?= $esc($schoolYear) ?></span></td></tr>
+    </table>
+
+    <div class="section-title">LEARNING PROGRESS AND ACHIEVEMENT</div>
+    <?php if (empty($subjectRows)): ?>
+        <div class="no-grades">No submitted grades available for this student.</div>
+    <?php else: ?>
+        <table class="grades">
+            <thead>
+                <tr>
+                    <th style="width: 34%;">Learning Areas</th>
+                    <th>Quarter 1</th>
+                    <th>Quarter 2</th>
+                    <th>Quarter 3</th>
+                    <th>Quarter 4</th>
+                    <th>Final Grade</th>
+                    <th>Remarks</th>
+                </tr>
+            </thead>
+            <tbody>
+                <?php foreach ($subjectRows as $row): ?>
+                    <tr>
+                        <td class="area"><?= $esc($row['subject']) ?></td>
+                        <td><?= $esc($gradeDisplay($row['q1'])) ?></td>
+                        <td><?= $esc($gradeDisplay($row['q2'])) ?></td>
+                        <td><?= $esc($gradeDisplay($row['q3'])) ?></td>
+                        <td><?= $esc($gradeDisplay($row['q4'])) ?></td>
+                        <td><?= $esc($gradeDisplay($row['final'])) ?></td>
+                        <td><?= $esc($row['remarks']) ?></td>
+                    </tr>
+                <?php endforeach; ?>
+                <tr class="average-row">
+                    <td class="area">General Average</td>
+                    <td></td><td></td><td></td><td></td>
+                    <td><?= $esc($gradeDisplay($generalAverage)) ?></td>
+                    <td><?= $esc($generalRemarks) ?></td>
+                </tr>
+            </tbody>
+        </table>
+    <?php endif; ?>
+
+    <div class="section-title">GRADING SCALE</div>
+    <table class="scale">
+        <thead><tr><th>Description</th><th>Grading Scale</th><th>Remarks</th></tr></thead>
+        <tbody>
+            <tr><td>Outstanding</td><td style="text-align:center;">90-100</td><td style="text-align:center;">Passed</td></tr>
+            <tr><td>Very Satisfactory</td><td style="text-align:center;">85-89</td><td style="text-align:center;">Passed</td></tr>
+            <tr><td>Satisfactory</td><td style="text-align:center;">80-84</td><td style="text-align:center;">Passed</td></tr>
+            <tr><td>Fairly Satisfactory</td><td style="text-align:center;">75-79</td><td style="text-align:center;">Passed</td></tr>
+            <tr><td>Did Not Meet Expectations</td><td style="text-align:center;">Below 75</td><td style="text-align:center;">Failed</td></tr>
+        </tbody>
+    </table>
+
+    <div class="footer">MCA Portal Student Grade Report<br>Generated through MCA Campus Companion</div>
+</body>
+</html>
+        <?php
+        return ob_get_clean();
     }
 
     /**

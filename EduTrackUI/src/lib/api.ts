@@ -280,6 +280,7 @@ export const API_ENDPOINTS = {
   FINAL_GRADES: `${API_BASE_URL}/api/final-grades`,
   FINAL_GRADES_SUBMIT: `${API_BASE_URL}/api/final-grades/submit`,
   FINAL_GRADES_SUBMISSION_CONTROL: `${API_BASE_URL}/api/final-grades/submission-control`,
+  STUDENT_FINAL_GRADES: `${API_BASE_URL}/api/student/final-grades`,
 
   // PDF Reports
   REPORTS_STUDENTS: `${API_BASE_URL}/api/reports/students`,

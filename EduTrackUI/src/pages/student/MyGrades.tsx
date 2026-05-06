@@ -15,6 +15,10 @@ type CourseGradeCard = {
   code: string;
   title: string;
   teacher: string;
+  finalGradeNum: number | null;
+  finalGradeText: string | null;
+  finalRemarks: string | null;
+  submissionStatus: string | null;
   activeGrade: number | null;
   rawScore: number;
   maxScore: number;
@@ -137,7 +141,20 @@ const MyGrades = () => {
           activePeriod?.id ??
           null;
 
-        // 4) Fetch subjects for student (same shape used by my courses)
+        // 4) Fetch submitted final grades for this student (active period only)
+        let finalGradeRows: any[] = [];
+        try {
+          const params = new URLSearchParams();
+          if (activeGradingPeriodId) params.set('academic_period_id', String(activeGradingPeriodId));
+          const finalGradesRes = await apiGet(`${API_ENDPOINTS.STUDENT_FINAL_GRADES}${params.toString() ? `?${params.toString()}` : ''}`);
+          const rows = finalGradesRes.data || finalGradesRes.grades || finalGradesRes || [];
+          finalGradeRows = Array.isArray(rows) ? rows : [];
+        } catch (err) {
+          console.warn('Failed to fetch final grades', err);
+          finalGradeRows = [];
+        }
+
+        // 5) Fetch subjects for student (same shape used by my courses)
         let subjects: any[] = [];
         try {
           const params = new URLSearchParams();
@@ -150,7 +167,7 @@ const MyGrades = () => {
           subjects = [];
         }
 
-        // 5) Fetch teacher names via teacher-subject-assignments
+        // 6) Fetch teacher names via teacher-subject-assignments
         const teacherMap = new Map<number, { first_name: string; last_name: string }>();
         try {
           const subjectIds = (Array.isArray(subjects) ? subjects : []).map((s: any) => s?.id).filter(Boolean);
@@ -168,7 +185,23 @@ const MyGrades = () => {
           console.warn('Failed to fetch teacher-subject-assignments', err);
         }
 
-        // 6) Fetch grades per subject using existing student-grades endpoint used in student pages
+        const finalGradesBySubject = new Map<string, any>();
+        finalGradeRows.forEach((row) => {
+          const subjectId = String(row?.subject_id ?? row?.subjectId ?? '').trim();
+          if (!subjectId) return;
+          const submittedAt = row?.submitted_at ?? row?.submittedAt ?? '';
+          const existing = finalGradesBySubject.get(subjectId);
+          if (!existing) {
+            finalGradesBySubject.set(subjectId, row);
+            return;
+          }
+          const existingAt = existing?.submitted_at ?? existing?.submittedAt ?? '';
+          if (!existingAt || (submittedAt && String(submittedAt) > String(existingAt))) {
+            finalGradesBySubject.set(subjectId, row);
+          }
+        });
+
+        // 7) Fetch grades per subject using existing student-grades endpoint used in student pages
         const sectionId = student?.section_id ?? student?.sectionId ?? null;
         const subjectActivitiesMap = new Map<string, any[]>();
 
@@ -196,7 +229,7 @@ const MyGrades = () => {
           await Promise.all(calls);
         }
 
-        // 7) Build per-subject card metrics from active grading-period activities
+        // 8) Build per-subject card metrics from active grading-period activities
         const coursesWithGrades: CourseGradeCard[] = (Array.isArray(subjects) ? subjects : []).map((subject: any, index: number) => {
           const subjectId = subject?.id ?? subject?.subject_id ?? `subject-${index}`;
           const normalizedSubjectId = String(subjectId);
@@ -237,6 +270,14 @@ const MyGrades = () => {
           });
 
           const activeGrade = maxScore > 0 ? Math.round((rawScore / maxScore) * 100) : null;
+          const finalRow = finalGradesBySubject.get(normalizedSubjectId) || null;
+          const finalGradeNumRaw = finalRow?.final_grade_num ?? finalRow?.finalGradeNum ?? null;
+          const finalGradeNum = finalGradeNumRaw !== null && finalGradeNumRaw !== undefined && !Number.isNaN(Number(finalGradeNumRaw))
+            ? Number(finalGradeNumRaw)
+            : null;
+          const finalGradeText = finalRow?.final_grade ?? finalRow?.finalGrade ?? null;
+          const finalRemarks = finalRow?.remarks ?? finalRow?.finalRemarks ?? null;
+          const submissionStatus = finalRow?.submission_status ?? finalRow?.status ?? null;
 
           return {
             id: subjectId,
@@ -244,6 +285,10 @@ const MyGrades = () => {
             code: subject?.course_code || subject?.code || 'N/A',
             title: subject?.course_name || subject?.title || subject?.name || `Subject ${index + 1}`,
             teacher: teacherName,
+            finalGradeNum,
+            finalGradeText,
+            finalRemarks,
+            submissionStatus,
             activeGrade,
             rawScore,
             maxScore,
@@ -268,23 +313,23 @@ const MyGrades = () => {
   }, [user, isAuthenticated]);
 
   const gradedCourses = useMemo(
-    () => courses.filter((c) => c.activeGrade !== null),
+    () => courses.filter((c) => c.finalGradeNum !== null),
     [courses]
   );
 
   const overallAverage = useMemo(() => {
     if (gradedCourses.length === 0) return null;
-    const sum = gradedCourses.reduce((acc, item) => acc + Number(item.activeGrade), 0);
+    const sum = gradedCourses.reduce((acc, item) => acc + Number(item.finalGradeNum), 0);
     return Math.round(sum / gradedCourses.length);
   }, [gradedCourses]);
 
   const passingCount = useMemo(
-    () => gradedCourses.filter((c) => Number(c.activeGrade) >= 75).length,
+    () => gradedCourses.filter((c) => Number(c.finalGradeNum) >= 75).length,
     [gradedCourses]
   );
 
   const failingCount = useMemo(
-    () => gradedCourses.filter((c) => Number(c.activeGrade) < 75).length,
+    () => gradedCourses.filter((c) => Number(c.finalGradeNum) < 75).length,
     [gradedCourses]
   );
 
@@ -363,7 +408,7 @@ const MyGrades = () => {
                 </CardTitle>
               </CardHeader>
               <CardContent className="pt-0 text-sm text-blue-800">
-                {gradedCourses.length} graded subject{gradedCourses.length === 1 ? '' : 's'}
+                {gradedCourses.length} submitted subject{gradedCourses.length === 1 ? '' : 's'}
               </CardContent>
             </Card>
 
@@ -442,24 +487,26 @@ const MyGrades = () => {
                             <p className="font-semibold text-foreground truncate">{course.title}</p>
                             <p className="text-xs text-muted-foreground mt-0.5">{course.code}</p>
                           </div>
-                          <span className={`inline-flex shrink-0 items-center justify-center rounded-md border px-2.5 py-1 text-sm font-bold ${gradeTone(course.activeGrade)}`}>
-                            {course.activeGrade !== null ? course.activeGrade : '—'}
+                            <span className={`inline-flex shrink-0 items-center justify-center rounded-md border px-2.5 py-1 text-sm font-bold ${gradeTone(course.finalGradeNum)}`}>
+                            {course.finalGradeNum !== null ? Math.round(course.finalGradeNum) : (course.finalGradeText || '—')}
                           </span>
                         </div>
 
                         <p className="mt-2 text-xs text-muted-foreground truncate">Instructor: {course.teacher || 'TBA'}</p>
+                        {course.finalRemarks && (
+                          <p className="mt-1 text-xs text-muted-foreground truncate">Remarks: {course.finalRemarks}</p>
+                        )}
 
-                        <Progress
-                          value={Math.max(0, Math.min(100, course.activeGrade ?? 0))}
-                          className="mt-3 h-2 bg-muted"
-                        />
+                        {course.finalGradeNum !== null && (
+                          <Progress
+                            value={Math.max(0, Math.min(100, course.finalGradeNum ?? 0))}
+                            className="mt-3 h-2 bg-muted"
+                          />
+                        )}
 
-                        <div className="mt-3 flex items-center justify-between text-xs text-muted-foreground">
-                          <span>{course.gradedActivities} graded activit{course.gradedActivities === 1 ? 'y' : 'ies'}</span>
-                          <span>
-                            {course.maxScore > 0 ? `${Math.round(course.rawScore)}/${Math.round(course.maxScore)} pts` : 'No scores yet'}
-                          </span>
-                        </div>
+                        {course.finalGradeNum === null && (
+                          <p className="mt-3 text-xs text-muted-foreground italic">No final grade yet</p>
+                        )}
                       </div>
                     ))}
                   </div>
@@ -477,10 +524,6 @@ const MyGrades = () => {
                       <span className="w-2.5 h-2.5 rounded-sm bg-slate-300 border border-slate-400 inline-block" />
                       Not yet graded
                     </span>
-                    <span className="flex items-center gap-1.5">
-                      <span className="w-2.5 h-2.5 rounded-sm bg-sky-500/20 border border-sky-500/40 inline-block" />
-                      Graded in active period only
-                    </span>
                   </div>
                 </>
               )}
@@ -489,7 +532,7 @@ const MyGrades = () => {
 
           {notYetGradedCount > 0 && (
             <p className="text-xs text-muted-foreground text-center sm:text-left">
-              {notYetGradedCount} subject{notYetGradedCount === 1 ? '' : 's'} currently have no graded activities in {activeGradingLabel.toLowerCase()}.
+              {notYetGradedCount} subject{notYetGradedCount === 1 ? '' : 's'} do not have submitted final grades yet for {activeGradingLabel.toLowerCase()}.
             </p>
           )}
         </div>

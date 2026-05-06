@@ -9,6 +9,209 @@ use PhpOffice\PhpSpreadsheet\Style\Border;
 use PhpOffice\PhpSpreadsheet\Style\NumberFormat;
 use PhpOffice\PhpSpreadsheet\Cell\Coordinate;
 
+function export_hybrid_class_record_excel($courseInfo, $students, $components, $weights, $filename)
+{
+    $filename = preg_replace('/[^A-Za-z0-9_. -]/', '', $filename);
+    if (!preg_match('/\.xlsx$/i', $filename)) {
+        $filename .= '.xlsx';
+    }
+
+    $spreadsheet = new Spreadsheet();
+    $sheet = $spreadsheet->getActiveSheet();
+    $sheet->setTitle('Class Record');
+
+    $courseName = $courseInfo['course_name'] ?? 'N/A';
+    $courseCode = $courseInfo['course_code'] ?? '';
+    $teacherName = $courseInfo['teacher_name'] ?? 'N/A';
+    $sectionName = $courseInfo['section_name'] ?? 'N/A';
+    $courseLevel = $courseInfo['course_level'] ?? '';
+    $periodInfo = $courseInfo['period_info'] ?? '';
+
+    $currentRow = 1;
+    $sheet->setCellValue("A{$currentRow}", trim($courseCode . ' - ' . $courseName, ' -'));
+    $sheet->mergeCells("A{$currentRow}:H{$currentRow}");
+    $sheet->getStyle("A{$currentRow}")->applyFromArray([
+        'font' => ['bold' => true, 'size' => 16, 'color' => ['rgb' => '1F4788']],
+        'alignment' => ['horizontal' => Alignment::HORIZONTAL_CENTER]
+    ]);
+    $currentRow++;
+
+    $levelText = $courseLevel ? " | Grade Level: {$courseLevel}" : '';
+    $sheet->setCellValue("A{$currentRow}", "Teacher: {$teacherName} | Section: {$sectionName}{$levelText}");
+    $sheet->mergeCells("A{$currentRow}:H{$currentRow}");
+    $sheet->getStyle("A{$currentRow}")->applyFromArray([
+        'font' => ['bold' => true, 'size' => 12],
+        'alignment' => ['horizontal' => Alignment::HORIZONTAL_CENTER]
+    ]);
+    $currentRow++;
+
+    if ($periodInfo) {
+        $sheet->setCellValue("A{$currentRow}", $periodInfo);
+        $sheet->mergeCells("A{$currentRow}:H{$currentRow}");
+        $sheet->getStyle("A{$currentRow}")->applyFromArray([
+            'font' => ['italic' => true, 'size' => 11],
+            'alignment' => ['horizontal' => Alignment::HORIZONTAL_CENTER]
+        ]);
+        $currentRow++;
+    }
+
+    $sheet->setCellValue("A{$currentRow}", 'Total Students: ' . count($students));
+    $sheet->getStyle("A{$currentRow}")->getFont()->setBold(true);
+    $currentRow++;
+    $sheet->setCellValue("A{$currentRow}", 'Legend: HPS = Highest Possible Score, PS = Percentage Score, WS = Weighted Score');
+    $sheet->getStyle("A{$currentRow}")->getFont()->setItalic(true)->setSize(9);
+    $currentRow += 2;
+
+    $componentDefs = [
+        ['key' => 'written', 'title' => 'Written Works', 'weight_key' => 'ww', 'color' => 'D9EAF7'],
+        ['key' => 'performance', 'title' => 'Performance Tasks', 'weight_key' => 'pt', 'color' => 'E2F0D9'],
+        ['key' => 'quarterly', 'title' => 'Quarterly Assessment', 'weight_key' => 'qa', 'color' => 'FFF2CC'],
+    ];
+
+    $groupRow = $currentRow;
+    $headerRow = $currentRow + 1;
+    $col = 1;
+    $sheet->setCellValue(Coordinate::stringFromColumnIndex($col++) . $headerRow, 'No');
+    $sheet->setCellValue(Coordinate::stringFromColumnIndex($col++) . $headerRow, 'Student ID');
+    $sheet->setCellValue(Coordinate::stringFromColumnIndex($col++) . $headerRow, "Learner's Name");
+    $sheet->mergeCells("A{$groupRow}:C{$groupRow}");
+    $sheet->setCellValue("A{$groupRow}", 'Student Info');
+
+    $componentMeta = [];
+    foreach ($componentDefs as $def) {
+        $items = $components[$def['key']] ?? [];
+        $startCol = $col;
+        foreach ($items as $item) {
+            $sheet->setCellValue(Coordinate::stringFromColumnIndex($col++) . $headerRow, $item['title']);
+        }
+        $sheet->setCellValue(Coordinate::stringFromColumnIndex($col++) . $headerRow, 'Total');
+        $sheet->setCellValue(Coordinate::stringFromColumnIndex($col++) . $headerRow, 'PS');
+        $sheet->setCellValue(Coordinate::stringFromColumnIndex($col++) . $headerRow, 'WS');
+        $endCol = $col - 1;
+        $startLetter = Coordinate::stringFromColumnIndex($startCol);
+        $endLetter = Coordinate::stringFromColumnIndex($endCol);
+        $sheet->mergeCells("{$startLetter}{$groupRow}:{$endLetter}{$groupRow}");
+        $sheet->setCellValue("{$startLetter}{$groupRow}", $def['title'] . ' (' . ($weights[$def['weight_key']] ?? 0) . '%)');
+        $sheet->getStyle("{$startLetter}{$groupRow}:{$endLetter}{$headerRow}")->getFill()
+            ->setFillType(Fill::FILL_SOLID)->getStartColor()->setRGB($def['color']);
+        $componentMeta[$def['key']] = ['items' => $items, 'start' => $startCol, 'end' => $endCol, 'weight_key' => $def['weight_key']];
+    }
+
+    $initialCol = $col;
+    $sheet->setCellValue(Coordinate::stringFromColumnIndex($col++) . $headerRow, 'Initial');
+    $finalCol = $col;
+    $sheet->setCellValue(Coordinate::stringFromColumnIndex($col++) . $headerRow, 'Final');
+    $lastCol = $col - 1;
+    $lastColLetter = Coordinate::stringFromColumnIndex($lastCol);
+    $initialLetter = Coordinate::stringFromColumnIndex($initialCol);
+    $finalLetter = Coordinate::stringFromColumnIndex($finalCol);
+    $sheet->mergeCells("{$initialLetter}{$groupRow}:{$finalLetter}{$groupRow}");
+    $sheet->setCellValue("{$initialLetter}{$groupRow}", 'Quarter Grade');
+
+    $sheet->getStyle("A{$groupRow}:{$lastColLetter}{$headerRow}")->applyFromArray([
+        'font' => ['bold' => true],
+        'alignment' => ['horizontal' => Alignment::HORIZONTAL_CENTER, 'vertical' => Alignment::VERTICAL_CENTER],
+        'borders' => ['allBorders' => ['borderStyle' => Border::BORDER_THIN]]
+    ]);
+
+    $currentRow = $headerRow + 1;
+    $hpsRow = $currentRow;
+    $sheet->setCellValue("B{$hpsRow}", 'HPS ->');
+    foreach ($componentMeta as $key => $meta) {
+        $items = $meta['items'];
+        $hps = array_sum(array_map(fn($i) => (float)($i['max_score'] ?? 0), $items));
+        $col = $meta['start'];
+        foreach ($items as $item) {
+            $sheet->setCellValue(Coordinate::stringFromColumnIndex($col++) . $hpsRow, (float)($item['max_score'] ?? 0));
+        }
+        $sheet->setCellValue(Coordinate::stringFromColumnIndex($col++) . $hpsRow, round($hps, 2));
+        $sheet->setCellValue(Coordinate::stringFromColumnIndex($col++) . $hpsRow, $hps > 0 ? 100 : 0);
+        $sheet->setCellValue(Coordinate::stringFromColumnIndex($col++) . $hpsRow, (float)($weights[$meta['weight_key']] ?? 0));
+    }
+    $totalWeight = (float)($weights['ww'] ?? 0) + (float)($weights['pt'] ?? 0) + (float)($weights['qa'] ?? 0);
+    $sheet->setCellValue(Coordinate::stringFromColumnIndex($initialCol) . $hpsRow, round($totalWeight, 2));
+    $sheet->setCellValue(Coordinate::stringFromColumnIndex($finalCol) . $hpsRow, round($totalWeight));
+
+    $sheet->getStyle("A{$hpsRow}:{$lastColLetter}{$hpsRow}")->applyFromArray([
+        'font' => ['bold' => true, 'italic' => true],
+        'fill' => ['fillType' => Fill::FILL_SOLID, 'startColor' => ['rgb' => 'E7E6E6']],
+        'alignment' => ['horizontal' => Alignment::HORIZONTAL_CENTER],
+        'borders' => ['allBorders' => ['borderStyle' => Border::BORDER_THIN]]
+    ]);
+
+    $currentRow++;
+    $dataStartRow = $currentRow;
+    $studentNo = 1;
+    $previousGenderGroup = null;
+    $genderGroupRows = [];
+    foreach ($students as $student) {
+        $genderGroup = $student['gender_group'] ?? 'UNSPECIFIED';
+        if ($genderGroup !== $previousGenderGroup) {
+            $genderGroupRows[] = $currentRow;
+            $sheet->setCellValue("C{$currentRow}", $genderGroup);
+            $sheet->mergeCells("C{$currentRow}:{$lastColLetter}{$currentRow}");
+            $sheet->getStyle("A{$currentRow}:{$lastColLetter}{$currentRow}")->applyFromArray([
+                'font' => ['bold' => true],
+                'fill' => ['fillType' => Fill::FILL_SOLID, 'startColor' => ['rgb' => 'F2F2F2']],
+                'alignment' => ['horizontal' => Alignment::HORIZONTAL_LEFT, 'vertical' => Alignment::VERTICAL_CENTER],
+                'borders' => ['allBorders' => ['borderStyle' => Border::BORDER_THIN]]
+            ]);
+            $previousGenderGroup = $genderGroup;
+            $currentRow++;
+        }
+
+        $col = 1;
+        $sheet->setCellValue(Coordinate::stringFromColumnIndex($col++) . $currentRow, $studentNo++);
+        $sheet->setCellValue(Coordinate::stringFromColumnIndex($col++) . $currentRow, $student['student_id'] ?? '');
+        $sheet->setCellValue(Coordinate::stringFromColumnIndex($col++) . $currentRow, $student['display_name'] ?? '');
+
+        foreach ($componentMeta as $key => $meta) {
+            foreach ($meta['items'] as $item) {
+                $score = $student['scores'][(int)$item['id']] ?? 0;
+                $sheet->setCellValue(Coordinate::stringFromColumnIndex($col++) . $currentRow, $score);
+            }
+            $sheet->setCellValue(Coordinate::stringFromColumnIndex($col++) . $currentRow, $student['metrics'][$key . '_total'] ?? 0);
+            $sheet->setCellValue(Coordinate::stringFromColumnIndex($col++) . $currentRow, $student['metrics'][$key . '_ps'] ?? 0);
+            $sheet->setCellValue(Coordinate::stringFromColumnIndex($col++) . $currentRow, $student['metrics'][$key . '_ws'] ?? 0);
+        }
+        $sheet->setCellValue(Coordinate::stringFromColumnIndex($col++) . $currentRow, $student['metrics']['initial'] ?? 0);
+        $sheet->setCellValue(Coordinate::stringFromColumnIndex($col++) . $currentRow, $student['metrics']['final'] ?? 0);
+        $currentRow++;
+    }
+
+    $dataEndRow = max($dataStartRow, $currentRow - 1);
+    $sheet->getStyle("A{$dataStartRow}:{$lastColLetter}{$dataEndRow}")->applyFromArray([
+        'borders' => ['allBorders' => ['borderStyle' => Border::BORDER_THIN]],
+        'alignment' => ['horizontal' => Alignment::HORIZONTAL_CENTER, 'vertical' => Alignment::VERTICAL_CENTER]
+    ]);
+
+    for ($row = $dataStartRow; $row <= $dataEndRow; $row++) {
+        if (in_array($row, $genderGroupRows, true)) {
+            continue;
+        }
+        $sheet->getStyle("C{$row}")->getAlignment()->setHorizontal(Alignment::HORIZONTAL_LEFT);
+        for ($col = 4; $col <= $lastCol; $col++) {
+            $sheet->getStyle(Coordinate::stringFromColumnIndex($col) . $row)->getNumberFormat()->setFormatCode('0.00');
+        }
+    }
+
+    $sheet->getColumnDimension('A')->setWidth(6);
+    $sheet->getColumnDimension('B')->setWidth(18);
+    $sheet->getColumnDimension('C')->setWidth(35);
+    for ($col = 4; $col <= $lastCol; $col++) {
+        $sheet->getColumnDimension(Coordinate::stringFromColumnIndex($col))->setWidth(12);
+    }
+    $sheet->freezePane('D' . $dataStartRow);
+
+    header('Content-Type: application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+    header('Content-Disposition: attachment; filename="' . $filename . '"');
+    header('Cache-Control: max-age=0');
+
+    $writer = new Xlsx($spreadsheet);
+    $writer->save('php://output');
+    exit;
+}
+
 /**
  * Export class record to Excel file with styling and formulas
  * 
@@ -36,6 +239,7 @@ function export_class_record_excel($courseInfo, $students, $activities, $grades,
     $courseCode = $courseInfo['course_code'] ?? '';
     $teacherName = $courseInfo['teacher_name'] ?? 'N/A';
     $sectionName = $courseInfo['section_name'] ?? 'N/A';
+    $courseLevel = $courseInfo['course_level'] ?? '';
     $periodInfo = $courseInfo['period_info'] ?? '';
     
     $currentRow = 1;
@@ -50,7 +254,8 @@ function export_class_record_excel($courseInfo, $students, $activities, $grades,
     $currentRow++;
     
     // Teacher and Section
-    $sheet->setCellValue("A{$currentRow}", "Teacher: {$teacherName} | Section: {$sectionName}");
+    $levelText = $courseLevel ? " | Level: {$courseLevel}" : '';
+    $sheet->setCellValue("A{$currentRow}", "Teacher: {$teacherName} | Section: {$sectionName}{$levelText}");
     $sheet->mergeCells("A{$currentRow}:F{$currentRow}");
     $sheet->getStyle("A{$currentRow}")->applyFromArray([
         'font' => ['bold' => true, 'size' => 12],

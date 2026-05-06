@@ -23,7 +23,7 @@ import { StudentGradeReportTab } from "@/components/reports/StudentGradeReportTa
 type ReportType = "enrollment" | "payment" | "paymentPlan" | "uniformOrder" | "studentStatus" | "studentGrade";
 type AutoFrequency = "today" | "weekly" | "monthly" | "all" | "custom";
 type StudentGradeScope = "bulk" | "individual";
-type StudentGradeStudentOption = { value: string; label: string; yearLevel: string };
+type StudentGradeStudentOption = { value: string; label: string; yearLevel: string; sectionName: string };
 
 type GenericRow = Record<string, string | number>;
 const AUTO_CONFIG_STORAGE_KEY = "admin_reports_auto_config_v1";
@@ -33,9 +33,7 @@ const toCanonical = (value: any) => String(value ?? "").trim().toLowerCase();
 const toYearLevelKey = (value: any) => {
   const raw = toCanonical(value);
   if (!raw) return "";
-  const num = raw.match(/\d+/)?.[0] ?? "";
-  if (num) return num;
-  return raw.replace(/^grade\s*/i, "").trim();
+  return raw.replace(/\s+/g, " ").trim();
 };
 
 const monthKey = (value: any): string => {
@@ -101,6 +99,7 @@ const PDFGeneration = () => {
   const [uniformItemFilter, setUniformItemFilter] = useState("all");
   const [studentGradeScope, setStudentGradeScope] = useState<StudentGradeScope>("bulk");
   const [studentGradeBulkYearLevel, setStudentGradeBulkYearLevel] = useState("");
+  const [studentGradeIndividualYearLevel, setStudentGradeIndividualYearLevel] = useState("");
   const [studentGradeStudentFilter, setStudentGradeStudentFilter] = useState("");
   const [studentGradeStudentQuery, setStudentGradeStudentQuery] = useState("");
   const [showStudentGradeSuggestions, setShowStudentGradeSuggestions] = useState(false);
@@ -234,8 +233,13 @@ const PDFGeneration = () => {
       id: String(s.id ?? s.student_id ?? s.user_id ?? ""),
       studentCode: String(s.student_id ?? s.studentId ?? ""),
       name: `${s.first_name ?? s.firstName ?? ""} ${s.last_name ?? s.lastName ?? ""}`.trim() || s.name || "Unknown",
+      displayName: [
+        String(s.last_name ?? s.lastName ?? "").trim(),
+        [String(s.first_name ?? s.firstName ?? "").trim(), String(s.middle_name ?? s.middleName ?? "").trim()].filter(Boolean).join(" "),
+      ].filter(Boolean).join(", ") || s.name || "Unknown",
       yearLevel: String(s.year_level ?? s.yearLevel ?? "Unknown"),
       sectionId: String(s.section_id ?? s.sectionId ?? ""),
+      gender: String(s.gender ?? s.sex ?? ""),
       status: String(s.status ?? "active"),
       createdAt: s.created_at ?? s.createdAt ?? "",
       email: String(s.email ?? s.user_email ?? ""),
@@ -663,7 +667,7 @@ const PDFGeneration = () => {
       const key = `${studentId}__${subjectId}`;
       const existing = grouped.get(key) ?? {
         studentId: student?.studentCode || studentId,
-        studentName: student?.name || `Student ${studentId}`,
+        studentName: student?.displayName || student?.name || `Student ${studentId}`,
         yearLevel: student?.yearLevel || "Unknown",
         sectionId: student?.sectionId || String(entry.section_id ?? ""),
         subjectId,
@@ -843,27 +847,20 @@ const PDFGeneration = () => {
   }, [studentGradeRows]);
 
   const studentGradeStudentOptions = useMemo<StudentGradeStudentOption[]>(() => {
-    const searchNorm = toCanonical(searchQuery);
+    const selectedYearLevelKey = toYearLevelKey(studentGradeIndividualYearLevel);
     return studentsNormalized
       .filter((student) => {
-        const sectionName = sectionNameById[student.sectionId] ?? student.sectionId;
-        const matchYear = yearLevelFilter === "all" || toCanonical(student.yearLevel) === toCanonical(yearLevelFilter);
-        const matchSection = sectionFilter === "all" || String(student.sectionId) === sectionFilter;
-        const matchSearch =
-          !searchNorm ||
-          toCanonical(student.name).includes(searchNorm) ||
-          toCanonical(student.studentCode).includes(searchNorm) ||
-          toCanonical(student.id).includes(searchNorm) ||
-          toCanonical(sectionName).includes(searchNorm);
-        return matchYear && matchSection && matchSearch;
+        if (!selectedYearLevelKey) return false;
+        return toYearLevelKey(student.yearLevel) === selectedYearLevelKey;
       })
       .map((student) => ({
         value: String(student.studentCode || student.id),
-        label: String(student.name || student.studentCode || student.id),
+        label: String(student.displayName || student.name || student.studentCode || student.id),
         yearLevel: String(student.yearLevel || "Unknown"),
+        sectionName: String(sectionNameById[student.sectionId] ?? student.sectionId ?? ""),
       }))
       .sort((a, b) => a.label.localeCompare(b.label));
-  }, [studentsNormalized, sectionNameById, searchQuery, yearLevelFilter, sectionFilter]);
+  }, [studentsNormalized, sectionNameById, studentGradeIndividualYearLevel]);
 
   const selectedStudentGradeOption = useMemo(
     () => studentGradeStudentOptions.find((opt) => opt.value === studentGradeStudentFilter) ?? null,
@@ -872,8 +869,8 @@ const PDFGeneration = () => {
 
   const resolvedStudentGradeYearLevel = useMemo(() => {
     if (studentGradeScope === "bulk") return studentGradeBulkYearLevel;
-    return selectedStudentGradeOption?.yearLevel ?? "";
-  }, [studentGradeScope, studentGradeBulkYearLevel, selectedStudentGradeOption]);
+    return studentGradeIndividualYearLevel;
+  }, [studentGradeScope, studentGradeBulkYearLevel, studentGradeIndividualYearLevel]);
 
   const filteredStudentGradeSuggestions = useMemo(() => {
     const queryNorm = toCanonical(studentGradeStudentQuery);
@@ -932,10 +929,18 @@ const PDFGeneration = () => {
 
   useEffect(() => {
     if (studentGradeScope !== "individual") return;
+    if (!studentGradeIndividualYearLevel && yearLevelOptions.length > 0) {
+      setStudentGradeIndividualYearLevel(yearLevelOptions[0]);
+    }
+  }, [studentGradeScope, studentGradeIndividualYearLevel, yearLevelOptions]);
+
+  useEffect(() => {
+    if (studentGradeScope !== "individual") return;
     if (!studentGradeStudentFilter) return;
     if (!studentGradeStudentOptions.some((opt) => opt.value === studentGradeStudentFilter)) {
       setStudentGradeStudentFilter("");
       setStudentGradeStudentQuery("");
+      showAlert("info", "Selected student does not belong to the chosen grade level.");
     }
   }, [studentGradeScope, studentGradeStudentFilter, studentGradeStudentOptions]);
 
@@ -1099,7 +1104,8 @@ const PDFGeneration = () => {
             return toCanonical(row.yearLevel) === toCanonical(studentGradeBulkYearLevel);
           }
           if (studentGradeStudentFilter) {
-            return String(row.studentId) === String(studentGradeStudentFilter);
+            return String(row.studentId) === String(studentGradeStudentFilter)
+              && toYearLevelKey(row.yearLevel) === toYearLevelKey(studentGradeIndividualYearLevel);
           }
           return false;
         })
@@ -1136,7 +1142,7 @@ const PDFGeneration = () => {
         Status: r.status,
         "Created Date": toIsoDate(r.createdAt) || "-",
       }));
-  }, [reportType, enrollments, payments, paymentPlans, uniformOrders, studentsNormalized, sectionNameById, studentById, paymentFeeTypeDraft, uniformItemFilter, studentGradeRows, autoFrequency, frequencyAnchorDate, generateFromDate, generateToDate, studentGradeScope, studentGradeBulkYearLevel, studentGradeStudentFilter, studentGradeSubjectFilter]);
+  }, [reportType, enrollments, payments, paymentPlans, uniformOrders, studentsNormalized, sectionNameById, studentById, paymentFeeTypeDraft, uniformItemFilter, studentGradeRows, autoFrequency, frequencyAnchorDate, generateFromDate, generateToDate, studentGradeScope, studentGradeBulkYearLevel, studentGradeIndividualYearLevel, studentGradeStudentFilter, studentGradeSubjectFilter]);
 
   const summaryCards = useMemo(() => {
     if (reportType === "enrollment") {
@@ -1441,7 +1447,7 @@ const PDFGeneration = () => {
       generateToDate: reportType === "studentGrade" ? "N/A" : (autoFrequency === "custom" ? (generateToDate || "Any") : "N/A"),
       paymentFeeType: reportType === "payment" ? paymentFeeTypeDraft : "N/A",
       studentGradeScope: reportType === "studentGrade" ? studentGradeScope : "N/A",
-      studentGradeLevel: reportType === "studentGrade" && studentGradeScope === "bulk" ? (studentGradeBulkYearLevel || "N/A") : "N/A",
+      studentGradeLevel: reportType === "studentGrade" ? (resolvedStudentGradeYearLevel || "N/A") : "N/A",
       studentGradeStudent: reportType === "studentGrade" && studentGradeScope === "individual" ? (selectedStudentGradeOption?.label || "N/A") : "N/A",
       studentGradeSubject:
         reportType === "studentGrade"
@@ -1456,7 +1462,27 @@ const PDFGeneration = () => {
       generatedAt: new Date().toLocaleString(),
       filters,
     };
-  }, [reportType, user, autoFrequency, paymentFeeTypeDraft, generateFromDate, generateToDate, studentGradeScope, studentGradeBulkYearLevel, selectedStudentGradeOption, resolvedStudentGradeYearLevel, studentGradeSubjectFilter, studentGradeSubjectOptions]);
+  }, [reportType, user, autoFrequency, paymentFeeTypeDraft, generateFromDate, generateToDate, studentGradeScope, selectedStudentGradeOption, resolvedStudentGradeYearLevel, studentGradeSubjectFilter, studentGradeSubjectOptions]);
+
+  const validateStudentGradeExport = () => {
+    if (reportType !== "studentGrade" || studentGradeScope !== "individual") return true;
+    if (!studentGradeIndividualYearLevel) {
+      showAlert("error", "Please select a grade level first.");
+      return false;
+    }
+    if (!studentGradeStudentFilter) {
+      showAlert("error", "Please select a student first.");
+      return false;
+    }
+    const selected = selectedStudentGradeOption;
+    if (!selected || toYearLevelKey(selected.yearLevel) !== toYearLevelKey(studentGradeIndividualYearLevel)) {
+      setStudentGradeStudentFilter("");
+      setStudentGradeStudentQuery("");
+      showAlert("error", "Selected student does not belong to the chosen grade level.");
+      return false;
+    }
+    return true;
+  };
 
   const statusOptions = useMemo(() => {
     if (reportType === "enrollment") {
@@ -1479,6 +1505,7 @@ const PDFGeneration = () => {
   }, [reportType, enrollmentRows]);
 
   const exportCsv = () => {
+    if (!validateStudentGradeExport()) return;
     if (reportRows.length === 0) {
       showAlert("error", "No rows to export.");
       return;
@@ -1548,6 +1575,7 @@ const PDFGeneration = () => {
   };
 
   const exportPdf = async () => {
+    if (!validateStudentGradeExport()) return;
     if (reportRows.length === 0) {
       showAlert("error", "No rows to export.");
       return;
@@ -1560,6 +1588,16 @@ const PDFGeneration = () => {
         generatedBy: user?.email || user?.name || "Admin",
         rows: reportRows,
         summary: summaryCards,
+        studentGradeScope,
+        studentGradeStudent: studentGradeScope === "individual" && selectedStudentGradeOption ? {
+          studentId: selectedStudentGradeOption.value,
+          name: selectedStudentGradeOption.label,
+          yearLevel: selectedStudentGradeOption.yearLevel,
+          sectionName: selectedStudentGradeOption.sectionName,
+          gender: studentsNormalized.find((student) => String(student.studentCode || student.id) === String(selectedStudentGradeOption.value))?.gender ?? "",
+        } : null,
+        studentGradeLevel: resolvedStudentGradeYearLevel,
+        studentGradeSubjectFilter,
       };
 
       const blob = await apiPostBlob(API_ENDPOINTS.REPORTS_ADMIN_PDF, payload);
@@ -1574,8 +1612,11 @@ const PDFGeneration = () => {
 
       showAlert("success", "PDF export completed.");
     } catch (err: any) {
-      showAlert("error", err?.message || "Failed to export PDF. Opening print fallback.");
-      openPrintFallback();
+      const usePrintFallback = !(reportType === "studentGrade" && studentGradeScope === "individual");
+      showAlert("error", err?.message || (usePrintFallback ? "Failed to export PDF. Opening print fallback." : "Failed to export PDF."));
+      if (usePrintFallback) {
+        openPrintFallback();
+      }
     } finally {
       setLoading(false);
     }
@@ -1593,6 +1634,7 @@ const PDFGeneration = () => {
     setUniformItemFilter("all");
     setStudentGradeScope("bulk");
     setStudentGradeBulkYearLevel("");
+    setStudentGradeIndividualYearLevel("");
     setStudentGradeStudentFilter("");
     setStudentGradeStudentQuery("");
     setShowStudentGradeSuggestions(false);
@@ -1914,11 +1956,32 @@ const PDFGeneration = () => {
                     )}
 
                     {studentGradeScope === "individual" && (
+                      <div>
+                        <Label className="text-xs text-muted-foreground mb-1.5 block">Grade Level</Label>
+                        <Select value={studentGradeIndividualYearLevel} onValueChange={(value) => {
+                          setStudentGradeIndividualYearLevel(value);
+                          setStudentGradeStudentFilter("");
+                          setStudentGradeStudentQuery("");
+                          setStudentGradeSubjectFilter("all");
+                          setShowStudentGradeSuggestions(false);
+                        }}>
+                          <SelectTrigger className="rounded-lg h-9 text-sm"><SelectValue placeholder="Select grade level" /></SelectTrigger>
+                          <SelectContent>
+                            {yearLevelOptions.map((level) => (
+                              <SelectItem key={level} value={level}>{level}</SelectItem>
+                            ))}
+                          </SelectContent>
+                        </Select>
+                      </div>
+                    )}
+
+                    {studentGradeScope === "individual" && (
                       <div className="relative">
                         <Label className="text-xs text-muted-foreground mb-1.5 block">Student</Label>
                         <Input
                           placeholder="Search student by ID or name..."
                           value={studentGradeStudentQuery}
+                          disabled={!studentGradeIndividualYearLevel}
                           onChange={(e) => {
                             setStudentGradeStudentQuery(e.target.value);
                             setStudentGradeStudentFilter("");
@@ -1947,7 +2010,9 @@ const PDFGeneration = () => {
                                 }}
                               >
                                 <div className="text-sm font-medium">{item.label}</div>
-                                <div className="text-xs text-muted-foreground">{item.value} • {item.yearLevel}</div>
+                                <div className="text-xs text-muted-foreground">
+                                  {item.value} • {item.yearLevel}{item.sectionName ? ` - ${item.sectionName}` : ""}
+                                </div>
                               </button>
                             ))}
                           </div>
@@ -1972,10 +2037,10 @@ const PDFGeneration = () => {
                   </div>
                 )}
                 <div className="grid grid-cols-2 gap-2">
-                  <Button variant="outline" size="sm" className="rounded-lg h-8 text-xs gap-1.5" onClick={exportCsv} disabled={reportRows.length === 0}>
+                  <Button variant="outline" size="sm" className="rounded-lg h-8 text-xs gap-1.5" onClick={exportCsv} disabled={reportRows.length === 0 && !(reportType === "studentGrade" && studentGradeScope === "individual")}>
                     <Download className="h-3.5 w-3.5" />CSV
                   </Button>
-                  <Button size="sm" className="rounded-lg h-8 text-xs gap-1.5" onClick={exportPdf} disabled={reportRows.length === 0}>
+                  <Button size="sm" className="rounded-lg h-8 text-xs gap-1.5" onClick={exportPdf} disabled={reportRows.length === 0 && !(reportType === "studentGrade" && studentGradeScope === "individual")}>
                     <FileDown className="h-3.5 w-3.5" />PDF
                   </Button>
                 </div>

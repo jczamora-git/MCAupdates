@@ -171,9 +171,8 @@ class FinalGradesController extends Controller
 
                 $assignmentSql = "SELECT tsa.id
                      FROM teacher_subject_assignments tsa
-                     JOIN teacher_subject_sections tss ON tsa.id = tss.teacher_subject_id
-                     WHERE tsa.teacher_id = ? AND tsa.subject_id = ? AND tss.section_id = ?";
-                $assignmentParams = [$teacher_id, $subject_id, $section_id];
+                     WHERE tsa.teacher_id = ? AND tsa.subject_id = ?";
+                $assignmentParams = [$teacher_id, $subject_id];
 
                 if ($schoolYear) {
                     $assignmentSql .= " AND tsa.school_year = ?";
@@ -196,7 +195,32 @@ class FinalGradesController extends Controller
                     http_response_code(403);
                     echo json_encode([
                         'success' => false,
-                        'message' => 'You are not assigned to teach this subject/section'
+                        'message' => 'You are not assigned to teach this subject and section.'
+                    ]);
+                    return;
+                }
+
+                $sectionSql = "SELECT yls.section_id
+                     FROM subjects s
+                     INNER JOIN year_levels yl ON yl.name COLLATE utf8mb4_unicode_ci = s.level COLLATE utf8mb4_unicode_ci
+                     INNER JOIN year_level_sections yls ON yls.year_level_id = yl.id
+                     WHERE s.id = ? AND yls.section_id = ?
+                     LIMIT 1";
+                $sectionStmt = $this->db->raw($sectionSql, [$subject_id, $section_id]);
+                $sectionMatch = null;
+                if ($sectionStmt) {
+                    try {
+                        $sectionMatch = $sectionStmt->fetch(PDO::FETCH_ASSOC);
+                    } catch (Exception $e) {
+                        $sectionMatch = null;
+                    }
+                }
+
+                if (empty($sectionMatch)) {
+                    http_response_code(403);
+                    echo json_encode([
+                        'success' => false,
+                        'message' => 'The selected section does not match this subject\'s grade level.'
                     ]);
                     return;
                 }

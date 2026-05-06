@@ -1779,6 +1779,121 @@ class StudentController extends Controller
     }
 
     /**
+     * Get submitted final grades for the logged-in student
+     * GET /api/student/final-grades?academic_period_id=20
+     */
+    public function api_get_my_final_grades()
+    {
+        api_set_json_headers();
+
+        if (!$this->session->userdata('logged_in')) {
+            http_response_code(401);
+            echo json_encode([
+                'success' => false,
+                'message' => 'Unauthorized'
+            ]);
+            return;
+        }
+
+        if ($this->session->userdata('role') !== 'student') {
+            http_response_code(403);
+            echo json_encode([
+                'success' => false,
+                'message' => 'Forbidden'
+            ]);
+            return;
+        }
+
+        try {
+            $userId = $this->session->userdata('user_id');
+            if (!$userId) {
+                http_response_code(400);
+                echo json_encode([
+                    'success' => false,
+                    'message' => 'Missing user id'
+                ]);
+                return;
+            }
+
+            $student = $this->db->table('students')
+                ->where('user_id', $userId)
+                ->get();
+
+            if (!$student || empty($student['id'])) {
+                http_response_code(404);
+                echo json_encode([
+                    'success' => false,
+                    'message' => 'Student not found'
+                ]);
+                return;
+            }
+
+            $academicPeriodId = $_GET['academic_period_id'] ?? null;
+            if (!$academicPeriodId) {
+                $activePeriod = $this->db->table('academic_periods')
+                    ->where('status', 'active')
+                    ->get();
+                $academicPeriodId = $activePeriod['id'] ?? null;
+            }
+
+            if (!$academicPeriodId) {
+                http_response_code(200);
+                echo json_encode([
+                    'success' => true,
+                    'grades' => [],
+                    'count' => 0
+                ]);
+                return;
+            }
+
+            $sql = "
+                SELECT
+                    fgs.id AS submission_id,
+                    fgs.subject_id,
+                    fgs.section_id,
+                    fgs.academic_period_id,
+                    fgs.quarter,
+                    fgs.status AS submission_status,
+                    fgs.submitted_at,
+                    fgsi.student_id,
+                    fgsi.final_grade_num,
+                    fgsi.final_grade,
+                    fgsi.remarks,
+                    s.course_code,
+                    s.name AS subject_name,
+                    s.level AS subject_level,
+                    ap.school_year,
+                    ap.quarter AS academic_quarter
+                FROM final_grade_submission_items fgsi
+                INNER JOIN final_grade_submissions fgs ON fgs.id = fgsi.submission_id
+                INNER JOIN subjects s ON s.id = fgs.subject_id
+                INNER JOIN academic_periods ap ON ap.id = fgs.academic_period_id
+                WHERE fgsi.student_id = ?
+                  AND fgs.status IN ('submitted', 'approved')
+                  AND fgs.academic_period_id = ?
+                ORDER BY s.name ASC, fgs.submitted_at DESC
+            ";
+
+            $stmt = $this->db->raw($sql, [$student['id'], $academicPeriodId]);
+            $rows = $stmt ? ($stmt->fetchAll(PDO::FETCH_ASSOC) ?: []) : [];
+
+            http_response_code(200);
+            echo json_encode([
+                'success' => true,
+                'grades' => $rows,
+                'count' => is_array($rows) ? count($rows) : 0,
+                'academic_period_id' => $academicPeriodId
+            ]);
+        } catch (Exception $e) {
+            http_response_code(500);
+            echo json_encode([
+                'success' => false,
+                'message' => 'Server error: ' . $e->getMessage()
+            ]);
+        }
+    }
+
+    /**
      * GET /api/students/{id}/courses
      * Returns courses (subjects) assigned to the student based on section and year level
      * Filters subjects by student's year_level and active semester.

@@ -143,6 +143,7 @@ $router->post('/api/students/send-welcome-email', 'StudentController::api_send_w
 
 // API Routes - Student Grades (Student accessible)
 $router->get('/api/student/grades-summary', 'StudentController::api_grades_summary');
+$router->get('/api/student/final-grades', 'StudentController::api_get_my_final_grades');
 
 // Tools / Utilities
 $router->get('/tools/generate-students', 'Tools::generate_students');

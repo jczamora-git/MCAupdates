@@ -8,7 +8,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Badge } from "@/components/ui/badge";
-import { ArrowLeft, Plus, Users, ClipboardList, UserPlus, LayoutGrid, List, CheckCircle2, AlertCircle, Clock, Mail, User, BookOpen, FileText, HelpCircle, Award, Zap, Microscope, Upload, FileIcon, X, Trash2, Search, Palette, MessageCircle, Mic, UsersRound, Settings } from "lucide-react";
+import { ArrowLeft, Plus, Users, ClipboardList, UserPlus, LayoutGrid, List, CheckCircle2, AlertCircle, Clock, Mail, User, BookOpen, FileText, HelpCircle, Award, Zap, Microscope, Upload, FileIcon, X, Trash2, Search, Palette, MessageCircle, Mic, UsersRound, Settings, Pencil, Eye } from "lucide-react";
 import ReactQuill from 'react-quill-new';
 import 'react-quill-new/dist/quill.snow.css';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
@@ -106,6 +106,8 @@ const CourseManagement = () => {
   const [editMaxScore, setEditMaxScore] = useState<string>("");
   const [editDueDate, setEditDueDate] = useState("");
   const [editAllowLateSubmission, setEditAllowLateSubmission] = useState(true);
+  const [deleteActivity, setDeleteActivity] = useState<any | null>(null);
+  const [deletingActivityId, setDeletingActivityId] = useState<number | null>(null);
   const [alert, setAlert] = useState<{ type: "success" | "error" | "info"; message: string } | null>(null);
   
 
@@ -122,6 +124,33 @@ const CourseManagement = () => {
     code: courseCode ?? "",
     section: sectionName ?? "",
     students: students.length,
+  };
+
+  const openEditActivity = (activity: any) => {
+    setEditActivityId(activity.id);
+    setEditTitle(activity.title ?? '');
+    setEditType(activity.type ?? '');
+    setEditDescription(activity.description ?? '');
+    setEditMaxScore(String(activity.max_score ?? ''));
+    setEditDueDate(activity.due_at ? String(activity.due_at).split(' ')[0] : '');
+    setEditAllowLateSubmission(activity.allow_late_submission === 1 || activity.allow_late_submission === true);
+    setIsEditOpen(true);
+  };
+
+  const handleDeleteActivity = async () => {
+    if (!deleteActivity?.id) return;
+    const activityId = Number(deleteActivity.id);
+    try {
+      setDeletingActivityId(activityId);
+      const res = await apiDelete(API_ENDPOINTS.ACTIVITY_BY_ID(activityId));
+      setActivities((prev) => prev.filter((activity) => Number(activity.id) !== activityId));
+      setDeleteActivity(null);
+      setAlert({ type: 'success', message: res?.message ?? 'Activity deleted successfully.' });
+    } catch (e) {
+      setAlert({ type: 'error', message: e instanceof Error ? e.message : 'Failed to delete activity' });
+    } finally {
+      setDeletingActivityId(null);
+    }
   };
 
   const [studentViewType, setStudentViewType] = useState<"list" | "grid">(() => {
@@ -864,6 +893,27 @@ const CourseManagement = () => {
                       </DialogContent>
                     </Dialog>
 
+                    <Dialog open={!!deleteActivity} onOpenChange={(open) => !open && setDeleteActivity(null)}>
+                      <DialogContent className="max-w-md">
+                        <DialogHeader>
+                          <DialogTitle>Delete Activity?</DialogTitle>
+                        </DialogHeader>
+                        <p className="text-sm text-gray-600">
+                          Are you sure you want to delete "{deleteActivity?.title ?? 'this activity'}"? This action may remove it from the students' activity list.
+                        </p>
+                        <div className="flex items-center justify-end gap-3 pt-4">
+                          <Button variant="outline" onClick={() => setDeleteActivity(null)} disabled={!!deletingActivityId}>Cancel</Button>
+                          <Button
+                            onClick={handleDeleteActivity}
+                            disabled={!!deletingActivityId}
+                            className="bg-red-600 text-white hover:bg-red-700"
+                          >
+                            {deletingActivityId ? 'Deleting...' : 'Delete Activity'}
+                          </Button>
+                        </div>
+                      </DialogContent>
+                    </Dialog>
+
                     <Dialog open={isAddOpen} onOpenChange={setIsAddOpen}>
                         <DialogTrigger asChild>
                         <Button size="sm" onClick={() => setIsAddOpen(true)} className="text-xs bg-gradient-to-r from-blue-600 to-cyan-500 text-white shadow-md rounded-full">
@@ -1129,10 +1179,11 @@ const CourseManagement = () => {
                               variant="default"
                               size="sm"
                               onClick={() => navigate(`/teacher/courses/${canonicalCourseId ?? courseId}/activities/${activity.id}/outputs${selectedSectionId ? `?section_id=${selectedSectionId}` : ''}`)}
-                              className="bg-gradient-to-r from-green-600 to-emerald-500 text-white hover:from-green-700 hover:to-emerald-600 font-medium"
+                              className="h-9 w-9 p-0 bg-white text-gray-700 border border-gray-300 hover:bg-green-50 hover:text-green-700 hover:border-green-300"
+                              title="View Outputs"
+                              aria-label="View activity outputs"
                             >
-                              <FileIcon className="h-3.5 w-3.5 mr-1.5" />
-                              View Outputs
+                              <FileIcon className="h-4 w-4" />
                             </Button>
                           )}
                           {(activity.type === 'quiz' || activity.type === 'exam') && (
@@ -1141,38 +1192,43 @@ const CourseManagement = () => {
                                 variant="default"
                                 size="sm"
                                 onClick={() => navigate(`/teacher/courses/${canonicalCourseId ?? courseId}/activities/${activity.id}/review${selectedSectionId ? `?section_id=${selectedSectionId}` : ''}`)}
-                                className="bg-gradient-to-r from-green-600 to-emerald-500 text-white hover:from-green-700 hover:to-emerald-600 font-medium"
+                                className="h-9 w-9 p-0 bg-white text-gray-700 border border-gray-300 hover:bg-green-50 hover:text-green-700 hover:border-green-300"
+                                title="Review"
+                                aria-label="Review activity"
                               >
-                                <FileIcon className="h-3.5 w-3.5 mr-1.5" />
-                                Review
+                                <Eye className="h-4 w-4" />
                               </Button>
                               <Button
                                 variant="outline"
                                 size="sm"
                                 onClick={() => navigate(`/teacher/courses/${canonicalCourseId ?? courseId}/activities/${activity.id}/quiz-builder`)}
-                                className="border-2 border-purple-200 text-purple-700 hover:bg-purple-50 font-medium"
+                                className="h-9 w-9 p-0 border border-gray-300 text-gray-700 hover:bg-purple-50 hover:text-purple-700 hover:border-purple-300"
+                                title="Configure"
+                                aria-label="Configure activity"
                               >
-                                <Settings className="h-3.5 w-3.5 mr-1.5" />
-                                Configure
+                                <Settings className="h-4 w-4" />
                               </Button>
                             </>
                           )}
                           <Button
                             variant="outline"
                             size="sm"
-                            onClick={() => {
-                              setEditActivityId(activity.id);
-                              setEditTitle(activity.title ?? '');
-                              setEditType(activity.type ?? '');
-                              setEditDescription(activity.description ?? '');
-                              setEditMaxScore(String(activity.max_score ?? ''));
-                              setEditDueDate(activity.due_at ? String(activity.due_at).split(' ')[0] : '');
-                              setEditAllowLateSubmission(activity.allow_late_submission === 1 || activity.allow_late_submission === true);
-                              setIsEditOpen(true);
-                            }}
-                            className="border-2 border-gray-300 text-gray-700 hover:bg-gray-100 font-medium"
+                            onClick={() => openEditActivity(activity)}
+                            className="h-9 w-9 p-0 border border-gray-300 text-gray-700 hover:bg-gray-100"
+                            title="Edit"
+                            aria-label="Edit activity"
                           >
-                            Edit
+                            <Pencil className="h-4 w-4" />
+                          </Button>
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            onClick={() => setDeleteActivity(activity)}
+                            className="h-9 w-9 p-0 border border-gray-300 text-gray-700 hover:bg-red-50 hover:text-red-700 hover:border-red-300"
+                            title="Delete"
+                            aria-label="Delete activity"
+                          >
+                            <Trash2 className="h-4 w-4" />
                           </Button>
                         </div>
                       </div>
@@ -1247,8 +1303,9 @@ const CourseManagement = () => {
                                   size="sm" 
                                   variant="default" 
                                   onClick={() => navigate(`/teacher/courses/${canonicalCourseId ?? courseId}/activities/${activity.id}/outputs${selectedSectionId ? `?section_id=${selectedSectionId}` : ''}`)}
-                                  className="bg-green-600 hover:bg-green-700 text-white shadow-sm"
+                                  className="h-8 w-8 p-0 bg-white text-gray-700 border border-gray-300 hover:bg-green-50 hover:text-green-700 hover:border-green-300 shadow-sm"
                                   title="View Outputs"
+                                  aria-label="View activity outputs"
                                 >
                                   <FileIcon className="h-3.5 w-3.5" />
                                 </Button>
@@ -1259,17 +1316,19 @@ const CourseManagement = () => {
                                     size="sm" 
                                     variant="default" 
                                     onClick={() => navigate(`/teacher/courses/${canonicalCourseId ?? courseId}/activities/${activity.id}/review${selectedSectionId ? `?section_id=${selectedSectionId}` : ''}`)}
-                                    className="bg-green-600 hover:bg-green-700 text-white shadow-sm"
-                                    title="Review Answers"
+                                    className="h-8 w-8 p-0 bg-white text-gray-700 border border-gray-300 hover:bg-green-50 hover:text-green-700 hover:border-green-300 shadow-sm"
+                                    title="Review"
+                                    aria-label="Review activity"
                                   >
-                                    <FileIcon className="h-3.5 w-3.5" />
+                                    <Eye className="h-3.5 w-3.5" />
                                   </Button>
                                   <Button 
                                     size="sm" 
                                     variant="outline" 
                                     onClick={() => navigate(`/teacher/courses/${canonicalCourseId ?? courseId}/activities/${activity.id}/quiz-builder`)}
-                                    className="border-2 border-purple-300 text-purple-700 hover:bg-purple-50"
-                                    title="Configure Quiz"
+                                    className="h-8 w-8 p-0 border border-gray-300 text-gray-700 hover:bg-purple-50 hover:text-purple-700 hover:border-purple-300"
+                                    title="Configure"
+                                    aria-label="Configure activity"
                                   >
                                     <Settings className="h-3.5 w-3.5" />
                                   </Button>
@@ -1278,20 +1337,22 @@ const CourseManagement = () => {
                               <Button 
                                 size="sm" 
                                 variant="outline" 
-                                onClick={() => {
-                                  setEditActivityId(activity.id);
-                                  setEditTitle(activity.title ?? '');
-                                  setEditType(activity.type ?? '');
-                                  setEditDescription(activity.description ?? '');
-                                  setEditMaxScore(String(activity.max_score ?? ''));
-                                  setEditDueDate(activity.due_at ? String(activity.due_at).split(' ')[0] : '');
-                                  setEditAllowLateSubmission(activity.allow_late_submission === 1 || activity.allow_late_submission === true);
-                                  setIsEditOpen(true);
-                                }}
-                                className="border-2 border-gray-300 text-gray-700 hover:bg-gray-100"
-                                title="Edit Activity"
+                                onClick={() => openEditActivity(activity)}
+                                className="h-8 w-8 p-0 border border-gray-300 text-gray-700 hover:bg-gray-100"
+                                title="Edit"
+                                aria-label="Edit activity"
                               >
-                                Edit
+                                <Pencil className="h-3.5 w-3.5" />
+                              </Button>
+                              <Button
+                                size="sm"
+                                variant="outline"
+                                onClick={() => setDeleteActivity(activity)}
+                                className="h-8 w-8 p-0 border border-gray-300 text-gray-700 hover:bg-red-50 hover:text-red-700 hover:border-red-300"
+                                title="Delete"
+                                aria-label="Delete activity"
+                              >
+                                <Trash2 className="h-3.5 w-3.5" />
                               </Button>
                             </div>
                           </div>

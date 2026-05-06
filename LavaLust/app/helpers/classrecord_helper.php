@@ -34,10 +34,12 @@ function export_class_record_csv($courseInfo, $studentRows, $activities, $filena
     $courseCode = $courseInfo['course_code'] ?? '';
     $teacherName = $courseInfo['teacher_name'] ?? 'N/A';
     $sectionName = $courseInfo['section_name'] ?? 'N/A';
+    $courseLevel = $courseInfo['course_level'] ?? '';
     $periodInfo = $courseInfo['period_info'] ?? '';
     
     fputcsv($output, [$courseCode . ' - ' . $courseName]);
-    fputcsv($output, ['Teacher: ' . $teacherName . ' | Section: ' . $sectionName]);
+    $levelText = $courseLevel ? ' | Level: ' . $courseLevel : '';
+    fputcsv($output, ['Teacher: ' . $teacherName . ' | Section: ' . $sectionName . $levelText]);
     if ($periodInfo) {
         fputcsv($output, [$periodInfo]);
     }

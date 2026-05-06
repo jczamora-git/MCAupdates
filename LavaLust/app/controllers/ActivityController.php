@@ -344,9 +344,22 @@ class ActivityController extends Controller
                 return;
             }
 
+            if ($userRole === 'teacher' && !$this->can_teacher_manage_activity($activity)) {
+                http_response_code(403);
+                echo json_encode([
+                    'success' => false,
+                    'message' => 'You are not assigned to delete this activity.'
+                ]);
+                return;
+            }
+
             $result = $this->ActivityModel->delete($id);
 
             if ($result) {
+                $this->db->raw(
+                    "UPDATE grading_input_items SET is_active = 0, updated_at = ? WHERE source_type = 'activity' AND source_activity_id = ?",
+                    [app_now(), (int)$id]
+                );
                 http_response_code(200);
                 echo json_encode([
                     'success' => true,
@@ -363,9 +376,41 @@ class ActivityController extends Controller
             http_response_code(500);
             echo json_encode([
                 'success' => false,
-                'message' => 'Server error: ' . $e->getMessage()
+                'message' => 'Failed to delete activity. It may have related submissions, quiz data, or grades that block deletion.'
             ]);
         }
+    }
+
+    private function can_teacher_manage_activity($activity)
+    {
+        $userId = (int)($this->session->userdata('user_id') ?? 0);
+        if ($userId <= 0) return false;
+
+        $teacher = $this->db->table('teachers')
+            ->select('id')
+            ->where('user_id', $userId)
+            ->get();
+        if (!$teacher) return false;
+
+        $schoolYear = null;
+        if (!empty($activity['academic_period_id'])) {
+            $period = $this->db->table('academic_periods')
+                ->select('school_year')
+                ->where('id', $activity['academic_period_id'])
+                ->get();
+            $schoolYear = $period['school_year'] ?? null;
+        }
+
+        $assignmentSql = "SELECT id FROM teacher_subject_assignments WHERE teacher_id = ? AND subject_id = ?";
+        $params = [(int)$teacher['id'], (int)($activity['subject_id'] ?? 0)];
+        if ($schoolYear) {
+            $assignmentSql .= " AND school_year = ?";
+            $params[] = $schoolYear;
+        }
+        $assignmentSql .= " LIMIT 1";
+
+        $assignment = $this->db->raw($assignmentSql, $params)->fetch(PDO::FETCH_ASSOC);
+        return (bool)$assignment;
     }
 
     /**
@@ -603,22 +648,102 @@ class ActivityController extends Controller
                 return;
             }
 
-            // Get course info with teacher name
-            $course = $this->db->table('teacher_subjects ts')
-                ->select('s.course_code, s.course_name, s.year_level, u.first_name as teacher_first_name, u.last_name as teacher_last_name')
-                ->join('subjects s', 's.id = ts.subject_id')
-                ->join('teachers t', 't.id = ts.teacher_id')
-                ->join('users u', 'u.id = t.user_id')
-                ->where('ts.id', $courseId)
+            $subjectId = $courseId;
+            $subject = $this->db->table('subjects')
+                ->select('id, course_code, name, level')
+                ->where('id', $subjectId)
                 ->get();
 
-            if (!$course) {
+            if (!$subject) {
                 http_response_code(404);
                 echo json_encode([
                     'success' => false,
-                    'message' => 'Course not found'
+                    'message' => 'Subject not found'
                 ]);
                 return;
+            }
+
+            if (!$academicPeriodId) {
+                http_response_code(400);
+                echo json_encode([
+                    'success' => false,
+                    'message' => 'Missing required parameter: academic_period_id'
+                ]);
+                return;
+            }
+
+            $period = $this->db->table('academic_periods')
+                ->select('id, school_year, quarter')
+                ->where('id', $academicPeriodId)
+                ->get();
+
+            if (!$period) {
+                http_response_code(404);
+                echo json_encode([
+                    'success' => false,
+                    'message' => 'Academic period not found'
+                ]);
+                return;
+            }
+
+            $userRole = $this->session->userdata('role');
+            if (!in_array($userRole, ['admin', 'teacher'], true)) {
+                http_response_code(403);
+                echo json_encode([
+                    'success' => false,
+                    'message' => 'Forbidden'
+                ]);
+                return;
+            }
+
+            $teacherName = 'N/A';
+            if ($userRole === 'teacher') {
+                $userId = $this->session->userdata('user_id');
+                $teacher = $this->db->table('teachers t')
+                    ->select('t.id, u.first_name, u.last_name')
+                    ->join('users u', 'u.id = t.user_id')
+                    ->where('t.user_id', $userId)
+                    ->get();
+
+                if (!$teacher) {
+                    http_response_code(403);
+                    echo json_encode([
+                        'success' => false,
+                        'message' => 'Teacher record not found'
+                    ]);
+                    return;
+                }
+
+                $assignment = $this->db->table('teacher_subject_assignments')
+                    ->select('id')
+                    ->where('teacher_id', $teacher['id'])
+                    ->where('subject_id', $subjectId)
+                    ->where('school_year', $period['school_year'])
+                    ->get();
+
+                if (!$assignment) {
+                    http_response_code(403);
+                    echo json_encode([
+                        'success' => false,
+                        'message' => 'You are not assigned to export this subject for this school year.'
+                    ]);
+                    return;
+                }
+
+                $teacherName = trim(($teacher['first_name'] ?? '') . ' ' . ($teacher['last_name'] ?? '')) ?: 'N/A';
+            } else {
+                $assignedTeacherSql = "SELECT u.first_name, u.last_name
+                    FROM teacher_subject_assignments tsa
+                    JOIN teachers t ON t.id = tsa.teacher_id
+                    JOIN users u ON u.id = t.user_id
+                    WHERE tsa.subject_id = ?
+                      AND tsa.school_year = ?
+                    LIMIT 1";
+                $assignedTeacher = $this->db->raw($assignedTeacherSql, [$subjectId, $period['school_year']])
+                    ->fetch(PDO::FETCH_ASSOC);
+                if ($assignedTeacher) {
+                    $teacherName = trim(($assignedTeacher['first_name'] ?? '') . ' ' . ($assignedTeacher['last_name'] ?? '')) ?: 'N/A';
+                }
             }
 
             // Get section info
@@ -635,20 +760,28 @@ class ActivityController extends Controller
                 return;
             }
 
-            // Get academic period info
-            $periodInfo = '';
-            if ($academicPeriodId) {
-                $period = $this->db->table('academic_periods')
-                    ->where('id', $academicPeriodId)
-                    ->get();
-                if ($period) {
-                    $periodInfo = $period['school_year'] . ' - ' . $period['semester'] . ' (' . $period['period_type'] . ')';
-                }
+            $levelCheckSql = "SELECT yls.section_id
+                FROM year_levels yl
+                JOIN year_level_sections yls ON yls.year_level_id = yl.id
+                WHERE TRIM(LOWER(yl.name)) = TRIM(LOWER(?))
+                  AND yls.section_id = ?
+                LIMIT 1";
+            $levelCheck = $this->db->raw($levelCheckSql, [$subject['level'], $sectionId])->fetch(PDO::FETCH_ASSOC);
+
+            if (!$levelCheck) {
+                http_response_code(400);
+                echo json_encode([
+                    'success' => false,
+                    'message' => "The selected section does not match this subject's grade level."
+                ]);
+                return;
             }
+
+            $periodInfo = $period['school_year'] . ' - ' . ($period['quarter'] ?? '');
 
             // Get activities
             $activityFilters = [
-                'course_id' => $courseId,
+                'course_id' => $subjectId,
                 'section_id' => $sectionId
             ];
             if ($academicPeriodId) {
@@ -672,15 +805,10 @@ class ActivityController extends Controller
             }
 
             // Get students with grades
-            $yearLevel = $course['year_level'] ?? null;
             $studentsQuery = $this->db->table('students st')
                 ->select('st.id, st.student_id, u.first_name, u.last_name, u.email')
                 ->join('users u', 'u.id = st.user_id')
                 ->where('st.section_id', $sectionId);
-            
-            if ($yearLevel) {
-                $studentsQuery->where('st.year_level', $yearLevel);
-            }
             
             $students = $studentsQuery->get_all();
 
@@ -773,9 +901,10 @@ class ActivityController extends Controller
 
             // Prepare data for helper
             $courseInfo = [
-                'course_code' => $course['course_code'] ?? '',
-                'course_name' => $course['course_name'] ?? '',
-                'teacher_name' => trim(($course['teacher_first_name'] ?? '') . ' ' . ($course['teacher_last_name'] ?? '')),
+                'course_code' => $subject['course_code'] ?? '',
+                'course_name' => $subject['name'] ?? '',
+                'course_level' => $subject['level'] ?? '',
+                'teacher_name' => $teacherName,
                 'section_name' => $section['name'] ?? 'N/A',
                 'period_info' => $periodInfo
             ];
@@ -787,7 +916,7 @@ class ActivityController extends Controller
             ];
 
             // Generate filename
-            $courseCode = $course['course_code'] ?? 'Course';
+            $courseCode = $subject['course_code'] ?? 'Course';
             $sectionName = $section['name'] ?? 'Section';
             $timestamp = date('Ymd_His');
             $filename = "ClassRecord_{$courseCode}_{$sectionName}_{$timestamp}.csv";
@@ -802,7 +931,7 @@ class ActivityController extends Controller
             http_response_code(500);
             echo json_encode([
                 'success' => false,
-                'message' => 'Export failed: ' . $e->getMessage()
+                'message' => 'Export failed'
             ]);
         }
     }
@@ -841,22 +970,102 @@ class ActivityController extends Controller
                 return;
             }
 
-            // Get course info with teacher name
-            $course = $this->db->table('teacher_subjects ts')
-                ->select('s.course_code, s.course_name, s.year_level, u.first_name as teacher_first_name, u.last_name as teacher_last_name')
-                ->join('subjects s', 's.id = ts.subject_id')
-                ->join('teachers t', 't.id = ts.teacher_id')
-                ->join('users u', 'u.id = t.user_id')
-                ->where('ts.id', $courseId)
+            $subjectId = $courseId;
+            $subject = $this->db->table('subjects')
+                ->select('id, course_code, name, level')
+                ->where('id', $subjectId)
                 ->get();
 
-            if (!$course) {
+            if (!$subject) {
                 http_response_code(404);
                 echo json_encode([
                     'success' => false,
-                    'message' => 'Course not found'
+                    'message' => 'Subject not found'
                 ]);
                 return;
+            }
+
+            if (!$academicPeriodId) {
+                http_response_code(400);
+                echo json_encode([
+                    'success' => false,
+                    'message' => 'Missing required parameter: academic_period_id'
+                ]);
+                return;
+            }
+
+            $period = $this->db->table('academic_periods')
+                ->select('id, school_year, quarter')
+                ->where('id', $academicPeriodId)
+                ->get();
+
+            if (!$period) {
+                http_response_code(404);
+                echo json_encode([
+                    'success' => false,
+                    'message' => 'Academic period not found'
+                ]);
+                return;
+            }
+
+            $userRole = $this->session->userdata('role');
+            if (!in_array($userRole, ['admin', 'teacher'], true)) {
+                http_response_code(403);
+                echo json_encode([
+                    'success' => false,
+                    'message' => 'Forbidden'
+                ]);
+                return;
+            }
+
+            $teacherName = 'N/A';
+            if ($userRole === 'teacher') {
+                $userId = $this->session->userdata('user_id');
+                $teacher = $this->db->table('teachers t')
+                    ->select('t.id, u.first_name, u.last_name')
+                    ->join('users u', 'u.id = t.user_id')
+                    ->where('t.user_id', $userId)
+                    ->get();
+
+                if (!$teacher) {
+                    http_response_code(403);
+                    echo json_encode([
+                        'success' => false,
+                        'message' => 'Teacher record not found'
+                    ]);
+                    return;
+                }
+
+                $assignment = $this->db->table('teacher_subject_assignments')
+                    ->select('id')
+                    ->where('teacher_id', $teacher['id'])
+                    ->where('subject_id', $subjectId)
+                    ->where('school_year', $period['school_year'])
+                    ->get();
+
+                if (!$assignment) {
+                    http_response_code(403);
+                    echo json_encode([
+                        'success' => false,
+                        'message' => 'You are not assigned to export this subject for this school year.'
+                    ]);
+                    return;
+                }
+
+                $teacherName = trim(($teacher['first_name'] ?? '') . ' ' . ($teacher['last_name'] ?? '')) ?: 'N/A';
+            } else {
+                $assignedTeacherSql = "SELECT u.first_name, u.last_name
+                    FROM teacher_subject_assignments tsa
+                    JOIN teachers t ON t.id = tsa.teacher_id
+                    JOIN users u ON u.id = t.user_id
+                    WHERE tsa.subject_id = ?
+                      AND tsa.school_year = ?
+                    LIMIT 1";
+                $assignedTeacher = $this->db->raw($assignedTeacherSql, [$subjectId, $period['school_year']])
+                    ->fetch(PDO::FETCH_ASSOC);
+                if ($assignedTeacher) {
+                    $teacherName = trim(($assignedTeacher['first_name'] ?? '') . ' ' . ($assignedTeacher['last_name'] ?? '')) ?: 'N/A';
+                }
             }
 
             // Get section info
@@ -873,100 +1082,44 @@ class ActivityController extends Controller
                 return;
             }
 
-            // Get academic period info
-            $periodInfo = '';
-            if ($academicPeriodId) {
-                $period = $this->db->table('academic_periods')
-                    ->where('id', $academicPeriodId)
-                    ->get();
-                if ($period) {
-                    $periodInfo = $period['school_year'] . ' - ' . $period['semester'] . ' (' . $period['period_type'] . ')';
-                }
+            $levelCheckSql = "SELECT yls.section_id
+                FROM year_levels yl
+                JOIN year_level_sections yls ON yls.year_level_id = yl.id
+                WHERE TRIM(LOWER(yl.name)) = TRIM(LOWER(?))
+                  AND yls.section_id = ?
+                LIMIT 1";
+            $levelCheck = $this->db->raw($levelCheckSql, [$subject['level'], $sectionId])->fetch(PDO::FETCH_ASSOC);
+
+            if (!$levelCheck) {
+                http_response_code(400);
+                echo json_encode([
+                    'success' => false,
+                    'message' => "The selected section does not match this subject's grade level."
+                ]);
+                return;
             }
 
-            // Get activities
-            $activityFilters = [
-                'course_id' => $courseId,
-                'section_id' => $sectionId
-            ];
-            if ($academicPeriodId) {
-                $activityFilters['academic_period_id'] = $academicPeriodId;
-            }
-            $activities = $this->ActivityModel->get_all($activityFilters);
+            $quarter = isset($_GET['quarter']) ? trim((string)$_GET['quarter']) : ($period['quarter'] ?? null);
+            $periodInfo = $period['school_year'] . ' - ' . ($quarter ?: ($period['quarter'] ?? ''));
 
-            // Categorize activities
-            $written = [];
-            $performance = [];
-            $exam = [];
-            foreach ($activities as $act) {
-                $type = strtolower($act['type'] ?? '');
-                if (in_array($type, ['quiz', 'assignment', 'other'])) {
-                    $written[] = $act;
-                } elseif (in_array($type, ['project', 'laboratory', 'performance'])) {
-                    $performance[] = $act;
-                } elseif ($type === 'exam') {
-                    $exam[] = $act;
-                }
-            }
-
-            // Get students
-            $yearLevel = $course['year_level'] ?? null;
-            $studentsQuery = $this->db->table('students st')
-                ->select('st.id, st.student_id, u.first_name, u.last_name, u.email')
-                ->join('users u', 'u.id = st.user_id')
-                ->where('st.section_id', $sectionId);
-            
-            if ($yearLevel) {
-                $studentsQuery->where('st.year_level', $yearLevel);
-            }
-            
-            $students = $studentsQuery->get_all();
-
-            // Get all grades
-            $activityIds = array_column($activities, 'id');
-            $studentIds = array_column($students, 'id');
-            
-            $grades = [];
-            if (!empty($activityIds) && !empty($studentIds)) {
-                $activityPlaceholders = implode(',', array_fill(0, count($activityIds), '?'));
-                $studentPlaceholders = implode(',', array_fill(0, count($studentIds), '?'));
-                
-                $query = "SELECT * FROM activity_grades 
-                          WHERE activity_id IN ($activityPlaceholders) 
-                          AND student_id IN ($studentPlaceholders)";
-                
-                $bindValues = array_merge($activityIds, $studentIds);
-                $gradesData = $this->db->raw($query, $bindValues)->fetchAll(PDO::FETCH_ASSOC);
-                
-                foreach ($gradesData as $grade) {
-                    $key = $grade['student_id'] . '_' . $grade['activity_id'];
-                    $grades[$key] = $grade['grade'];
-                }
-            }
-
-            // Prepare data for helper
             $courseInfo = [
-                'course_code' => $course['course_code'] ?? '',
-                'course_name' => $course['course_name'] ?? '',
-                'teacher_name' => trim(($course['teacher_first_name'] ?? '') . ' ' . ($course['teacher_last_name'] ?? '')),
+                'course_code' => $subject['course_code'] ?? '',
+                'course_name' => $subject['name'] ?? '',
+                'course_level' => $subject['level'] ?? '',
+                'teacher_name' => $teacherName,
                 'section_name' => $section['name'] ?? 'N/A',
                 'period_info' => $periodInfo
             ];
-
-            $categorizedActivities = [
-                'written' => $written,
-                'performance' => $performance,
-                'exam' => $exam
-            ];
+            $classRecord = $this->build_hybrid_class_record_data($subjectId, $sectionId, (int)$academicPeriodId, $quarter, $courseInfo);
 
             // Generate filename
-            $courseCode = $course['course_code'] ?? 'Course';
+            $courseCode = $subject['course_code'] ?? 'Course';
             $sectionName = $section['name'] ?? 'Section';
             $timestamp = date('Ymd_His');
             $filename = "ClassRecord_{$courseCode}_{$sectionName}_{$timestamp}.xlsx";
 
             // Call helper to export Excel (this will exit)
-            export_class_record_excel($courseInfo, $students, $categorizedActivities, $grades, $filename);
+            export_hybrid_class_record_excel($courseInfo, $classRecord['students'], $classRecord['components'], $classRecord['weights'], $filename);
 
         } catch (Exception $e) {
             // Log the error for debugging
@@ -975,7 +1128,7 @@ class ActivityController extends Controller
             http_response_code(500);
             echo json_encode([
                 'success' => false,
-                'message' => 'Export failed: ' . $e->getMessage()
+                'message' => 'Export failed'
             ]);
         }
     }
@@ -995,6 +1148,305 @@ class ActivityController extends Controller
         if ($percentage >= 76) return "2.75";
         if ($percentage >= 75) return "3.00";
         return "5.00";
+    }
+
+    private function build_hybrid_class_record_data($subjectId, $sectionId, $academicPeriodId, $quarter, $courseInfo)
+    {
+        $this->sync_lms_grading_input_items((int)$subjectId, (int)$sectionId, (int)$academicPeriodId, $quarter);
+
+        $params = [(int)$subjectId, (int)$sectionId, (int)$academicPeriodId];
+        $quarterSql = '';
+        if ($quarter !== null && trim((string)$quarter) !== '') {
+            $quarterSql = " AND (quarter = ? OR quarter IS NULL OR quarter = '')";
+            $params[] = trim((string)$quarter);
+        }
+
+        $itemsStmt = $this->db->raw(
+            "SELECT id, subject_id, section_id, academic_period_id, quarter, title, component, max_score, source_type, source_activity_id, merge_strategy, display_order, is_active
+             FROM grading_input_items
+             WHERE subject_id = ? AND section_id = ? AND academic_period_id = ? AND is_active = 1" . $quarterSql . "
+             ORDER BY component ASC, display_order ASC, id ASC",
+            $params
+        );
+        $activeItems = $itemsStmt ? ($itemsStmt->fetchAll(PDO::FETCH_ASSOC) ?: []) : [];
+
+        $activeItemIds = array_values(array_map(fn($row) => (int)$row['id'], $activeItems));
+        $sourceByMergedItem = [];
+        $hiddenSourceIds = [];
+        if (!empty($activeItemIds)) {
+            $placeholders = implode(',', array_fill(0, count($activeItemIds), '?'));
+            $srcStmt = $this->db->raw(
+                "SELECT grading_input_item_id, source_type, source_activity_id, source_item_id, weight
+                 FROM grading_input_item_sources
+                 WHERE grading_input_item_id IN ($placeholders)
+                 ORDER BY id ASC",
+                $activeItemIds
+            );
+            $srcRows = $srcStmt ? ($srcStmt->fetchAll(PDO::FETCH_ASSOC) ?: []) : [];
+            foreach ($srcRows as $src) {
+                $mergedId = (int)$src['grading_input_item_id'];
+                if (!isset($sourceByMergedItem[$mergedId])) $sourceByMergedItem[$mergedId] = [];
+                $sourceByMergedItem[$mergedId][] = $src;
+                if (!empty($src['source_item_id'])) {
+                    $hiddenSourceIds[] = (int)$src['source_item_id'];
+                }
+            }
+        }
+
+        $hiddenSourceIds = array_values(array_unique(array_filter($hiddenSourceIds, fn($id) => $id > 0 && !in_array($id, $activeItemIds, true))));
+        $hiddenItems = [];
+        if (!empty($hiddenSourceIds)) {
+            $placeholders = implode(',', array_fill(0, count($hiddenSourceIds), '?'));
+            $hiddenStmt = $this->db->raw(
+                "SELECT id, subject_id, section_id, academic_period_id, quarter, title, component, max_score, source_type, source_activity_id, merge_strategy, display_order, is_active
+                 FROM grading_input_items WHERE id IN ($placeholders)",
+                $hiddenSourceIds
+            );
+            $hiddenItems = $hiddenStmt ? ($hiddenStmt->fetchAll(PDO::FETCH_ASSOC) ?: []) : [];
+        }
+
+        foreach ($activeItems as &$item) {
+            $itemId = (int)$item['id'];
+            $item['merge_sources'] = $sourceByMergedItem[$itemId] ?? [];
+        }
+        unset($item);
+
+        $allItems = array_merge($activeItems, $hiddenItems);
+        $manualItemIds = [];
+        $activityIds = [];
+        foreach ($allItems as $item) {
+            if (($item['source_type'] ?? '') === 'activity' && !empty($item['source_activity_id'])) {
+                $activityIds[] = (int)$item['source_activity_id'];
+            } else {
+                $manualItemIds[] = (int)$item['id'];
+            }
+        }
+        foreach ($sourceByMergedItem as $sources) {
+            foreach ($sources as $src) {
+                if (($src['source_type'] ?? '') === 'activity' && !empty($src['source_activity_id'])) {
+                    $activityIds[] = (int)$src['source_activity_id'];
+                } elseif (!empty($src['source_item_id'])) {
+                    $manualItemIds[] = (int)$src['source_item_id'];
+                }
+            }
+        }
+        $manualItemIds = array_values(array_unique(array_filter($manualItemIds)));
+        $activityIds = array_values(array_unique(array_filter($activityIds)));
+
+        $studentsStmt = $this->db->raw(
+            "SELECT st.id, st.student_id, st.gender, u.first_name, u.last_name, u.middle_name
+             FROM students st
+             JOIN users u ON u.id = st.user_id
+             WHERE st.section_id = ?
+               AND st.year_level = ?",
+            [(int)$sectionId, $courseInfo['course_level'] ?? '']
+        );
+        $students = $studentsStmt ? ($studentsStmt->fetchAll(PDO::FETCH_ASSOC) ?: []) : [];
+        usort($students, function ($a, $b) {
+            $gd = $this->get_class_record_gender_rank($a['gender'] ?? '') - $this->get_class_record_gender_rank($b['gender'] ?? '');
+            if ($gd !== 0) return $gd;
+            $ln = strcasecmp((string)($a['last_name'] ?? ''), (string)($b['last_name'] ?? ''));
+            if ($ln !== 0) return $ln;
+            $fn = strcasecmp((string)($a['first_name'] ?? ''), (string)($b['first_name'] ?? ''));
+            if ($fn !== 0) return $fn;
+            $mn = strcasecmp((string)($a['middle_name'] ?? ''), (string)($b['middle_name'] ?? ''));
+            if ($mn !== 0) return $mn;
+            return strcasecmp((string)($a['student_id'] ?? ''), (string)($b['student_id'] ?? ''));
+        });
+        $studentIds = array_values(array_map(fn($row) => (int)$row['id'], $students));
+
+        $manualScores = [];
+        if (!empty($manualItemIds) && !empty($studentIds)) {
+            $itemPlaceholders = implode(',', array_fill(0, count($manualItemIds), '?'));
+            $studentPlaceholders = implode(',', array_fill(0, count($studentIds), '?'));
+            $scoreStmt = $this->db->raw(
+                "SELECT grading_input_item_id, student_id, score
+                 FROM grading_input_scores
+                 WHERE grading_input_item_id IN ($itemPlaceholders)
+                   AND student_id IN ($studentPlaceholders)",
+                array_merge($manualItemIds, $studentIds)
+            );
+            $scoreRows = $scoreStmt ? ($scoreStmt->fetchAll(PDO::FETCH_ASSOC) ?: []) : [];
+            foreach ($scoreRows as $row) {
+                $iid = (int)$row['grading_input_item_id'];
+                $sid = (int)$row['student_id'];
+                if (!isset($manualScores[$iid])) $manualScores[$iid] = [];
+                $manualScores[$iid][$sid] = is_null($row['score']) ? null : (float)$row['score'];
+            }
+        }
+
+        $activityScores = [];
+        if (!empty($activityIds) && !empty($studentIds)) {
+            $activityPlaceholders = implode(',', array_fill(0, count($activityIds), '?'));
+            $studentPlaceholders = implode(',', array_fill(0, count($studentIds), '?'));
+            $gradeStmt = $this->db->raw(
+                "SELECT activity_id, student_id, grade
+                 FROM activity_grades
+                 WHERE activity_id IN ($activityPlaceholders)
+                   AND student_id IN ($studentPlaceholders)",
+                array_merge($activityIds, $studentIds)
+            );
+            $gradeRows = $gradeStmt ? ($gradeStmt->fetchAll(PDO::FETCH_ASSOC) ?: []) : [];
+            foreach ($gradeRows as $row) {
+                $aid = (int)$row['activity_id'];
+                $sid = (int)$row['student_id'];
+                if (!isset($activityScores[$aid])) $activityScores[$aid] = [];
+                $activityScores[$aid][$sid] = is_null($row['grade']) ? null : (float)$row['grade'];
+            }
+        }
+
+        $sourceItemIds = [];
+        foreach ($sourceByMergedItem as $sources) {
+            foreach ($sources as $src) {
+                if (!empty($src['source_item_id'])) $sourceItemIds[] = (int)$src['source_item_id'];
+            }
+        }
+        $sourceItemIds = array_values(array_unique($sourceItemIds));
+        $visibleItems = array_values(array_filter($activeItems, function ($item) use ($sourceItemIds) {
+            return !in_array((int)$item['id'], $sourceItemIds, true);
+        }));
+
+        $components = ['written' => [], 'performance' => [], 'quarterly' => []];
+        foreach ($visibleItems as $item) {
+            $component = $item['component'] ?? 'written';
+            if (!isset($components[$component])) $component = 'written';
+            $components[$component][] = $item;
+        }
+
+        $weights = $this->get_class_record_weights($courseInfo['course_code'] ?? '');
+        $studentRows = [];
+        foreach ($students as $student) {
+            $sid = (int)$student['id'];
+            $scores = [];
+            foreach ($activeItems as $item) {
+                $itemId = (int)$item['id'];
+                $sourceType = $item['source_type'] ?? 'manual';
+                if ($sourceType === 'activity' && !empty($item['source_activity_id'])) {
+                    $scores[$itemId] = (float)($activityScores[(int)$item['source_activity_id']][$sid] ?? 0);
+                } elseif ($sourceType === 'merged') {
+                    $sum = 0.0;
+                    $count = 0;
+                    foreach ($sourceByMergedItem[$itemId] ?? [] as $src) {
+                        $sourceScore = null;
+                        if (($src['source_type'] ?? '') === 'activity' && !empty($src['source_activity_id'])) {
+                            $sourceScore = $activityScores[(int)$src['source_activity_id']][$sid] ?? null;
+                        } elseif (!empty($src['source_item_id'])) {
+                            $sourceScore = $manualScores[(int)$src['source_item_id']][$sid] ?? null;
+                        }
+                        if ($sourceScore !== null) {
+                            $sum += (float)$sourceScore * (float)($src['weight'] ?? 1);
+                            $count++;
+                        }
+                    }
+                    $scores[$itemId] = round((strtolower((string)($item['merge_strategy'] ?? 'sum')) === 'average' && $count > 0) ? ($sum / $count) : $sum, 2);
+                } else {
+                    $scores[$itemId] = (float)($manualScores[$itemId][$sid] ?? 0);
+                }
+            }
+
+            $metrics = $this->calculate_class_record_metrics($components, $scores, $weights);
+            $middleInitial = trim((string)($student['middle_name'] ?? '')) !== '' ? ' ' . strtoupper(substr(trim((string)$student['middle_name']), 0, 1)) . '.' : '';
+            $genderRankValue = $this->get_class_record_gender_rank($student['gender'] ?? '');
+            $studentRows[] = [
+                'id' => $sid,
+                'student_id' => $student['student_id'] ?? '',
+                'gender_group' => $genderRankValue === 0 ? 'MALE' : ($genderRankValue === 1 ? 'FEMALE' : 'UNSPECIFIED'),
+                'display_name' => trim(($student['last_name'] ?? '') . ', ' . ($student['first_name'] ?? '') . $middleInitial, ' ,'),
+                'scores' => $scores,
+                'metrics' => $metrics,
+            ];
+        }
+
+        return ['components' => $components, 'students' => $studentRows, 'weights' => $weights];
+    }
+
+    private function get_class_record_gender_rank($gender)
+    {
+        $g = strtolower(trim((string)$gender));
+        if (in_array($g, ['male', 'm', 'boy', 'man'], true)) return 0;
+        if (in_array($g, ['female', 'f', 'girl', 'woman'], true)) return 1;
+        return 2;
+    }
+
+    private function sync_lms_grading_input_items($courseId, $sectionId, $periodId, $quarter)
+    {
+        $activitiesStmt = $this->db->raw(
+            "SELECT id, title, type, max_score
+             FROM activities
+             WHERE subject_id = ? AND section_id = ? AND academic_period_id = ?
+             ORDER BY created_at ASC, id ASC",
+            [$courseId, $sectionId, $periodId]
+        );
+        $activities = $activitiesStmt ? ($activitiesStmt->fetchAll(PDO::FETCH_ASSOC) ?: []) : [];
+        $order = 1;
+        $now = app_now();
+        $userId = (int)($this->session->userdata('user_id') ?? 0);
+        foreach ($activities as $activity) {
+            $existingStmt = $this->db->raw(
+                "SELECT id FROM grading_input_items
+                 WHERE source_type = 'activity' AND source_activity_id = ?
+                   AND subject_id = ? AND section_id = ? AND academic_period_id = ?
+                 LIMIT 1",
+                [(int)$activity['id'], $courseId, $sectionId, $periodId]
+            );
+            $existing = $existingStmt ? $existingStmt->fetch(PDO::FETCH_ASSOC) : null;
+            if ($existing) {
+                $this->db->raw(
+                    "UPDATE grading_input_items SET title = ?, max_score = ?, display_order = ?, updated_at = ? WHERE id = ?",
+                    [(string)$activity['title'], (float)($activity['max_score'] ?? 0), $order, $now, (int)$existing['id']]
+                );
+            } else {
+                $this->db->raw(
+                    "INSERT INTO grading_input_items
+                        (subject_id, section_id, academic_period_id, quarter, title, component, max_score, source_type, source_activity_id, merge_strategy, display_order, is_active, created_by, created_at, updated_at)
+                     VALUES (?, ?, ?, ?, ?, ?, ?, 'activity', ?, 'sum', ?, 1, ?, ?, ?)",
+                    [$courseId, $sectionId, $periodId, $quarter, (string)$activity['title'], $this->map_component_from_activity_type($activity['type'] ?? ''), (float)($activity['max_score'] ?? 0), (int)$activity['id'], $order, $userId > 0 ? $userId : null, $now, $now]
+                );
+            }
+            $order++;
+        }
+    }
+
+    private function get_class_record_weights($courseCode)
+    {
+        $prefix = strtoupper(explode('-', (string)$courseCode)[0] ?? '');
+        if (in_array($prefix, ['MATH', 'SCI'], true)) return ['ww' => 40, 'pt' => 40, 'qa' => 20];
+        if (in_array($prefix, ['MAPEH', 'EPP'], true)) return ['ww' => 20, 'pt' => 60, 'qa' => 20];
+        return ['ww' => 30, 'pt' => 50, 'qa' => 20];
+    }
+
+    private function calculate_class_record_metrics($components, $scores, $weights)
+    {
+        $metrics = [];
+        $initial = 0.0;
+        $map = ['written' => 'ww', 'performance' => 'pt', 'quarterly' => 'qa'];
+        foreach ($map as $component => $weightKey) {
+            $total = 0.0;
+            $hps = 0.0;
+            foreach ($components[$component] ?? [] as $item) {
+                $itemId = (int)$item['id'];
+                $total += (float)($scores[$itemId] ?? 0);
+                $hps += (float)($item['max_score'] ?? 0);
+            }
+            $ps = ($total / ($hps ?: 1)) * 100;
+            $ws = ($total / ($hps ?: 1)) * (float)($weights[$weightKey] ?? 0);
+            $metrics[$component . '_total'] = round($total, 2);
+            $metrics[$component . '_ps'] = round($ps, 2);
+            $metrics[$component . '_ws'] = round($ws, 2);
+            $initial += $ws;
+        }
+        $metrics['initial'] = round($initial, 2);
+        $metrics['final'] = $this->format_final_grade_for_class_record($initial);
+        return $metrics;
+    }
+
+    private function format_final_grade_for_class_record($initialGrade)
+    {
+        $clamped = max(0, min(100, (float)$initialGrade));
+        if ($clamped >= 60) {
+            return min(100, 75 + floor(($clamped - 60) / 1.6));
+        }
+        return 60 + floor($clamped / 4);
     }
 
     /**
@@ -1638,6 +2090,131 @@ class ActivityController extends Controller
             $debugInfo['written_count'] = count($written);
             $debugInfo['performance_count'] = count($performance);
             $debugInfo['exam_count'] = count($exam);
+
+            if ($academicPeriodId) {
+                $subject = $this->db->table('subjects')
+                    ->select('course_code, name, level')
+                    ->where('id', $courseId)
+                    ->get();
+                $quarter = isset($_POST['quarter']) ? trim((string)$_POST['quarter']) : null;
+                $hybridRecord = $this->build_hybrid_class_record_data((int)$courseId, (int)$sectionId, (int)$academicPeriodId, $quarter, [
+                    'course_code' => $subject['course_code'] ?? '',
+                    'course_name' => $subject['name'] ?? '',
+                    'course_level' => $subject['level'] ?? '',
+                ]);
+
+                $hybridColumns = [];
+                $currentCol = 4;
+                foreach (['written', 'performance', 'quarterly'] as $component) {
+                    foreach ($hybridRecord['components'][$component] ?? [] as $item) {
+                        $hybridColumns[$currentCol] = $item;
+                        $currentCol++;
+                    }
+                    $currentCol += 3;
+                }
+
+                $studentIdMap = [];
+                foreach ($hybridRecord['students'] as $studentRow) {
+                    $studentIdMap[$studentRow['student_id']] = (int)$studentRow['id'];
+                }
+
+                $inserted = 0;
+                $updated = 0;
+                $skipped = 0;
+                $errors = [];
+                $processedStudents = [];
+
+                for ($row = $dataStartRow; $row <= $highestRow; $row++) {
+                    $studentIdCode = trim((string)($sheet->getCell('B' . $row)->getValue() ?? ''));
+                    if ($studentIdCode === '') continue;
+
+                    $studentDbId = $studentIdMap[$studentIdCode] ?? null;
+                    if (!$studentDbId) {
+                        $errors[] = "Row {$row}: Student ID '{$studentIdCode}' not found in database";
+                        continue;
+                    }
+                    $processedStudents[] = $studentIdCode;
+
+                    foreach ($hybridColumns as $colIndex => $item) {
+                        if (($item['source_type'] ?? '') === 'merged') {
+                            $skipped++;
+                            continue;
+                        }
+
+                        $cell = $sheet->getCell(\PhpOffice\PhpSpreadsheet\Cell\Coordinate::stringFromColumnIndex($colIndex) . $row);
+                        $cellValue = $cell->getCalculatedValue();
+                        if ($cellValue === null || $cellValue === '' || $cellValue === '-') continue;
+                        if (!is_numeric($cellValue)) continue;
+                        $score = max(0, min((float)$cellValue, (float)($item['max_score'] ?? $cellValue)));
+
+                        if (($item['source_type'] ?? '') === 'activity' && !empty($item['source_activity_id'])) {
+                            $activityId = (int)$item['source_activity_id'];
+                            $existingStmt = $this->db->raw(
+                                "SELECT id, grade FROM activity_grades WHERE activity_id = ? AND student_id = ? LIMIT 1",
+                                [$activityId, $studentDbId]
+                            );
+                            $existing = $existingStmt ? $existingStmt->fetch(PDO::FETCH_ASSOC) : null;
+                            if ($existing) {
+                                if ((float)($existing['grade'] ?? 0) !== $score) {
+                                    $this->db->raw(
+                                        "UPDATE activity_grades SET grade = ?, updated_at = ? WHERE id = ?",
+                                        [$score, app_now(), (int)$existing['id']]
+                                    );
+                                    $updated++;
+                                } else {
+                                    $skipped++;
+                                }
+                            } else {
+                                $now = app_now();
+                                $this->db->raw(
+                                    "INSERT INTO activity_grades (activity_id, student_id, grade, created_at, updated_at) VALUES (?, ?, ?, ?, ?)",
+                                    [$activityId, $studentDbId, $score, $now, $now]
+                                );
+                                $inserted++;
+                            }
+                        } else {
+                            $itemId = (int)$item['id'];
+                            $existingStmt = $this->db->raw(
+                                "SELECT id, score FROM grading_input_scores WHERE grading_input_item_id = ? AND student_id = ? LIMIT 1",
+                                [$itemId, $studentDbId]
+                            );
+                            $existing = $existingStmt ? $existingStmt->fetch(PDO::FETCH_ASSOC) : null;
+                            if ($existing) {
+                                if ((float)($existing['score'] ?? 0) !== $score) {
+                                    $this->db->raw(
+                                        "UPDATE grading_input_scores SET score = ?, updated_at = ? WHERE id = ?",
+                                        [$score, app_now(), (int)$existing['id']]
+                                    );
+                                    $updated++;
+                                } else {
+                                    $skipped++;
+                                }
+                            } else {
+                                $now = app_now();
+                                $this->db->raw(
+                                    "INSERT INTO grading_input_scores (grading_input_item_id, student_id, score, created_at, updated_at) VALUES (?, ?, ?, ?, ?)",
+                                    [$itemId, $studentDbId, $score, $now, $now]
+                                );
+                                $inserted++;
+                            }
+                        }
+                    }
+                }
+
+                http_response_code(200);
+                echo json_encode([
+                    'success' => true,
+                    'message' => 'Import completed successfully',
+                    'inserted' => $inserted,
+                    'updated' => $updated,
+                    'skipped' => $skipped,
+                    'processed_students' => count($processedStudents),
+                    'total_items' => count($hybridColumns),
+                    'errors' => $errors,
+                    'debug' => $debugInfo
+                ]);
+                return;
+            }
 
             // Map column positions based on header
             // Structure: No, Student ID, Name, [Written W1..Wn, Total, PS, WS], [Performance P1..Pn, Total, PS, WS], [Exam, PS, WS], Initial, Final

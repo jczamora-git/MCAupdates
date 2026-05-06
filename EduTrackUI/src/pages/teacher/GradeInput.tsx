@@ -503,6 +503,9 @@ const GradeInput = () => {
       if (selectedPeriodId) {
         query += `&academic_period_id=${encodeURIComponent(String(selectedPeriodId))}`;
       }
+      if (selectedQuarter) {
+        query += `&quarter=${encodeURIComponent(String(selectedQuarter))}`;
+      }
 
       // Download using fetch with credentials
       const url = `${API_ENDPOINTS.EXPORT_CLASS_RECORD}?${query}`;
@@ -566,6 +569,9 @@ const GradeInput = () => {
       
       if (selectedPeriodId) {
         query += `&academic_period_id=${encodeURIComponent(String(selectedPeriodId))}`;
+      }
+      if (selectedQuarter) {
+        query += `&quarter=${encodeURIComponent(String(selectedQuarter))}`;
       }
 
       // Download using fetch with credentials
@@ -662,6 +668,9 @@ const GradeInput = () => {
       formData.append('section_id', String(selectedSection));
       if (selectedPeriodId) {
         formData.append('academic_period_id', String(selectedPeriodId));
+      }
+      if (selectedQuarter) {
+        formData.append('quarter', String(selectedQuarter));
       }
 
       const response = await fetch(API_ENDPOINTS.IMPORT_CLASS_RECORD, {

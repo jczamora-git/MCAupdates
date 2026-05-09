@@ -616,9 +616,14 @@ class ReportController extends Controller
         .school-sub { text-align: center; font-size: 11px; color: #444; }
         h1 { text-align: center; font-size: 18px; font-weight: bold; margin: 14px 0 6px; letter-spacing: .5px; }
         .divider { border-top: 1px solid #1f2a44; margin: 10px 0; }
-        .info { width: 100%; border-collapse: collapse; margin-bottom: 14px; }
-        .info td { padding: 4px 6px; vertical-align: bottom; }
-        .line { border-bottom: 1px solid #000; min-height: 14px; display: inline-block; width: 100%; }
+        .student-info-form { width: 100%; border-collapse: collapse; table-layout: fixed; margin-top: 10px; margin-bottom: 14px; font-size: 10.5px; }
+        .student-info-form td { padding: 3px 8px 3px 0; vertical-align: bottom; border: none; white-space: nowrap; }
+        .student-info-form .field-label { display: inline-block; font-weight: 600; margin-right: 4px; }
+        .student-info-form .field-value { display: inline-block; min-height: 13px; border-bottom: 1px solid #222; padding: 0 4px 1px 4px; vertical-align: bottom; box-sizing: border-box; }
+        .student-info-form .field-name .field-value,
+        .student-info-form .field-lrn .field-value { width: 68%; }
+        .student-info-form tr:nth-child(2) .field-value { width: 62%; }
+        .student-info-form .field-school-year .field-value { width: 30%; }
         .section-title { text-align: center; font-weight: bold; margin: 10px 0 5px; font-size: 12px; }
         table.grades, table.scale { width: 100%; border-collapse: collapse; }
         table.grades th, table.grades td, table.scale th, table.scale td { border: 1px solid #000; padding: 5px 6px; }
@@ -655,18 +660,41 @@ class ReportController extends Controller
     <h1>STUDENT GRADE REPORT</h1>
     <div class="divider"></div>
 
-    <table class="info">
-        <tr><td style="width: 12%;">Name:</td><td colspan="5"><span class="line"><?= $esc($student['name'] ?? '') ?></span></td></tr>
+    <table class="student-info-form">
         <tr>
-            <td>Age:</td><td style="width: 18%;"><span class="line">&nbsp;</span></td>
-            <td style="width: 10%;">Sex:</td><td style="width: 18%;"><span class="line"><?= $esc($student['gender'] ?? '') ?></span></td>
-            <td style="width: 10%;">LRN:</td><td><span class="line">&nbsp;</span></td>
+            <td class="field field-name" colspan="2">
+                <span class="field-label">Name:</span>
+                <span class="field-value"><?= $esc($student['name'] ?? $student['studentName'] ?? '') ?></span>
+            </td>
+            <td class="field field-lrn" colspan="2">
+                <span class="field-label">LRN:</span>
+                <span class="field-value"><?= $esc($student['lrn'] ?? $student['LRN'] ?? '') ?></span>
+            </td>
         </tr>
         <tr>
-            <td>Grade:</td><td><span class="line"><?= $esc($student['yearLevel'] ?? '') ?></span></td>
-            <td>Section:</td><td colspan="3"><span class="line"><?= $esc($student['sectionName'] ?? '') ?></span></td>
+            <td class="field">
+                <span class="field-label">Age:</span>
+                <span class="field-value"><?= $esc($student['age'] ?? '') ?></span>
+            </td>
+            <td class="field">
+                <span class="field-label">Sex:</span>
+                <span class="field-value"><?= $esc($student['sex'] ?? $student['gender'] ?? '') ?></span>
+            </td>
+            <td class="field">
+                <span class="field-label">Grade:</span>
+                <span class="field-value"><?= $esc($student['grade'] ?? $student['year_level'] ?? $student['yearLevel'] ?? '') ?></span>
+            </td>
+            <td class="field">
+                <span class="field-label">Section:</span>
+                <span class="field-value"><?= $esc($student['section'] ?? $student['section_name'] ?? $student['sectionName'] ?? '') ?></span>
+            </td>
         </tr>
-        <tr><td>School Year:</td><td colspan="5"><span class="line"><?= $esc($schoolYear) ?></span></td></tr>
+        <tr>
+            <td class="field field-school-year" colspan="4">
+                <span class="field-label">School Year:</span>
+                <span class="field-value"><?= $esc($schoolYear) ?></span>
+            </td>
+        </tr>
     </table>
 
     <div class="section-title">LEARNING PROGRESS AND ACHIEVEMENT</div>
